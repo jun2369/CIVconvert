@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# real customer invoices and generated files stay local
+samples/
+output/

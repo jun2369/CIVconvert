@@ -1,0 +1,19 @@
+# CargoWise Commercial Invoice Lines 导入模板
+# 输出 CSV 的列 = 下面这个工作簿第 header_row 行的表头（当前 210 列，A=LNO … HB=Compliance Rule）。
+# 模板换了，只要替换 xlsx 文件即可，不用改代码；表头以下的示例行会被忽略。
+id: cargowise_civ_lines
+workbook: cargowise_civ_lines.xlsx   # 与本文件放在同一文件夹
+sheet:                               # 留空 = 第一个工作表
+header_row: 1
+
+csv:
+  # utf-8     = UTF-8，无 BOM（内容为纯英文时与 Excel “CSV (逗号分隔)” 完全相同）
+  # utf-8-sig = UTF-8 带 BOM（Excel “CSV UTF-8”）
+  # cp1252    = Windows 西文编码
+  encoding: utf-8
+  delimiter: ","
+  line_terminator: "\r\n"            # Windows / Excel 换行
+  # 部分 CargoWise 表头含一个不可见控制字符（xlsx 里存成 _x001F_，如 "US/Orig. Value _x001F_"）
+  # keep  = 原样写出（和 Excel “另存为 CSV” 的结果一致）
+  # strip = 去掉该字符
+  header_control_chars: keep

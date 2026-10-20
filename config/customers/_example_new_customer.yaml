@@ -1,0 +1,60 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# 新增客户的模板（以 "_" 开头的文件不会被加载）
+#   1. 复制本文件为  config/customers/<客户代码>.yaml （文件名不要以 _ 开头）
+#   2. 按客户 CIV 的表头修改 detect / table.columns / mapping
+#   3. 运行  python -m civconvert check-config   检查配置
+#   4. 用该客户的 PDF 测试：python -m civconvert convert "xxx.pdf" --customer <客户代码>
+# ─────────────────────────────────────────────────────────────────────────────
+id: customer_b                          # 客户代码（API / 网页里选择客户时用）
+name: CUSTOMER B TRADING CO., LTD.
+template: cargowise_civ_lines           # 用哪个 CargoWise 模板（config/templates/<名字>.yaml）
+                                        # 客户需要不同的模板：放一个新 xlsx + 同名 yaml 到 config/templates/
+
+detect:
+  all: ["CUSTOMER B TRADING"]           # PDF 里必须全部出现的文字
+  any: ["Commercial Invoice", "Invoice"] # （可选）至少出现其一
+  senders: ["*@customer-b.com"]         # （可选）发件人规则
+
+document_fields:
+  invoice_no: 'Invoice\s*(?:No|Number)\.?\s*[:#]?\s*([A-Za-z0-9\-/]+)'
+
+table:
+  strategy: lines                       # 表格没有线条时改为 text
+  columns:                              # 这个客户的表头叫什么，就写什么（正则，不区分大小写）
+    model: '^(Item\s*No|Part\s*No|Model)'
+    description: '^(Description|Goods)'
+    qty: '^(Q.?ty|Quantity)'
+    unit_price: '^Unit\s*Price'
+    amount: '^(Amount|Total)'
+    hs_code: '(HS|HTS)\s*Code'
+    origin: '^(Origin|COO)'
+  required: [model, description, hs_code]
+  stop_row: '^(Sub\s*total|Total|Grand\s*Total)\b'
+  totals_row: '^(Sub\s*total|Total|Grand\s*Total)\b'
+  # 单元格文字被拆到下一行（下一行没有 model、只有描述）时，自动接到上一行
+  continuation_rows: { when_empty: model, append: [description] }
+  # pdfplumber: { snap_tolerance: 3 }   # （高级）表格识别微调参数
+
+mapping:
+  A: { value: "{line_no}", number: true, expect: "LNO" }
+  C: { value: "{invoice_no}", expect: "Inv. # for Line" }   # 例：每行写发票号
+  D: { field: model, expect: "Product Code" }
+  E: { field: description, transforms: [strip_chinese], expect: "Goods Description" }
+  F: { field: hs_code, transforms: [remove_spaces], expect: "Tariff" }
+  I: { field: qty, expect: "Inv. Qty" }
+  J: { field: amount, transforms: [{ name: regex_replace, pattern: '[^0-9.\-]', replace: "" }], expect: "Line Price" }
+  U: { field: origin, expect: "ORG" }
+  # 可用的 transforms：strip_chinese（可加 mode: remove_all）、strip、upper、remove_spaces、
+  #                    digits_only、regex_replace（pattern / replace）
+
+checks:
+  totals: [qty, amount]
+  line_math: [qty, unit_price, amount]
+  patterns:
+    hs_code: '^\d{4}\.?\d{2}\.?\d{2}\.?(\d{2})?$'
+  min_letters_after_strip: 3            # 去中文后英文少于 3 个字母 -> 提示复核
+  ascii_only: true                      # 输出含非英文字符 -> 提示复核
+
+output:
+  filename: "CargoWise Input - {source_name}.csv"   # 也可用 {invoice_no}、{customer}
+  multi_file: merge                     # 这个客户的一张发票常被拆成多个 PDF -> 默认合并

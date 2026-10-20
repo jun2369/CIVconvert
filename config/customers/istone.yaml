@@ -1,0 +1,48 @@
+# 客户：ISTONE INNOVATION LIMITED（Insta360 / Arashi Vision）
+# 规则：Model -> D (Product Code)，Description 去中文 -> E (Goods Description)，
+#       United States HS Code -> F (Tariff)，A (LNO) = 1…N
+id: istone
+name: ISTONE INNOVATION LIMITED
+template: cargowise_civ_lines          # = config/templates/cargowise_civ_lines.yaml
+
+# 自动识别：PDF 文字里同时包含这些内容即视为该客户（不区分大小写）
+detect:
+  all: ["ISTONE INNOVATION LIMITED", "Commercial Invoice"]
+  senders: []                          # 发件人邮箱规则（Power Automate 传 sender 时使用），如 ["*@istone.com"]
+
+# 发票级信息（正则，括号内为取值），可在 mapping / 文件名里用 {invoice_no} 等引用
+document_fields:
+  invoice_no: 'Invoice\s*No\.?\s*:\s*([A-Za-z0-9\-/]+)'
+  invoice_date: 'Issued\s*Date\s*:\s*(\d{4}-\d{2}-\d{2})'
+
+# 明细表：按“表头文字”找列，不依赖列的位置
+table:
+  strategy: lines                      # lines = 有表格线的表格（本客户）；text = 无表格线、靠对齐
+  columns:                             # 字段名: 匹配表头单元格的正则
+    model: '^Model$'
+    description: '^Description$'
+    qty: '^QTY'
+    unit_price: '^Unit\s*Price'
+    amount: '^Total'
+    hs_code: 'HS\s*Code'
+  required: [model, description, hs_code]   # 同一行同时出现这几个表头 = 明细表表头
+  stop_row: '^(Sub\s*total|Total)\b'        # 第一格匹配此规则的行 = 明细结束
+  totals_row: '^Sub\s*total'                # 合计行（用于下方 checks.totals 校验）
+
+# 填入模板的列（列字母或模板表头名）。expect = 防止模板被换掉/列被挪动的保护
+mapping:
+  A: { value: "{line_no}", number: true, expect: "LNO" }
+  D: { field: model, expect: "Product Code" }
+  E: { field: description, transforms: [strip_chinese], expect: "Goods Description" }
+  F: { field: hs_code, expect: "Tariff" }
+
+# 校验（不通过不会中断，只会标记“需复核”并给出原因）
+checks:
+  totals: [qty, amount]                # 明细合计 = Subtotal 行（确认没有漏行/读错）
+  line_math: [qty, unit_price, amount] # 每行 数量 x 单价 = 金额
+  patterns:
+    hs_code: '^\d{4}\.?\d{2}\.?\d{2}\.?(\d{2})?$'
+
+output:
+  filename: "CargoWise Input - {source_name}.csv"   # {source_name} = PDF 文件名（不含 .pdf）
+  multi_file: separate                 # 一次传多个 PDF：separate = 各自独立的发票；merge = 同一张发票被拆开
