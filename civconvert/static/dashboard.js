@@ -39,25 +39,20 @@
 
   // ───────────── counts ─────────────
   const CARDS = [
-    { key: "today", label: "今天上传的 Invoice", cls: "info", apply: () => ({ from: todayStr(), to: "", status: "" }) },
     { key: "total", label: "文档总数", cls: "", apply: () => ({ from: "", to: "", status: "" }) },
     { key: "editing", label: "编辑中", cls: "", apply: () => ({ status: "editing" }) },
     { key: "confirmed", label: "已确认 / Ready", cls: "ok", apply: () => ({ status: "confirmed" }) },
     { key: "attention", label: "失败或需人工检查", cls: "err", apply: () => ({ status: "attention" }) },
-    { key: "exported", label: "已导出 CSV", cls: "", apply: null },
   ];
-  const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
   async function loadStats() {
-    const p = new URLSearchParams({ mine: state.scope === "mine", since: CIV.startOfToday().toISOString() });
+    const p = new URLSearchParams({ mine: state.scope === "mine" });
     const s = await api("/api/documents/stats?" + p);
     $("#stats").replaceChildren(...CARDS.map((c) => {
-      const active = c.key === "today" ? state.from === todayStr() && !state.to && !state.status
-        : c.key === "total" ? !state.status && !state.from && !state.to && !state.q
-          : c.apply && state.status === c.apply().status;
-      const card = el("button", { type: "button", class: `stat ${c.cls}${active ? " on" : ""}`, disabled: !c.apply,
-        title: c.apply ? "点击筛选列表" : "" }, el("span", { class: "n", text: String(s[c.key] ?? 0) }), el("span", { class: "l", text: c.label }));
-      if (c.apply) card.onclick = () => { Object.assign(state, { q: "", ...c.apply(), page: 1 }); syncControls(); refresh(); };
+      const active = c.key === "total" ? !state.status && !state.from && !state.to && !state.q : state.status === c.apply().status;
+      const card = el("button", { type: "button", class: `stat ${c.cls}${active ? " on" : ""}`, title: "点击筛选列表" },
+        el("span", { class: "n", text: String(s[c.key] ?? 0) }), el("span", { class: "l", text: c.label }));
+      card.onclick = () => { Object.assign(state, { q: "", ...c.apply(), page: 1 }); syncControls(); refresh(); };
       return card;
     }));
   }

@@ -41,7 +41,7 @@
   function center(node) {
     $("#center").hidden = false;
     $("#center").replaceChildren(node);
-    for (const id of ["#toolbar", "#fbar", "#gridwrap", "#statusbar", "#checks"]) $(id).hidden = true;
+    for (const id of ["#toolbar", "#fbar", "#gridwrap", "#statusbar"]) $(id).hidden = true;
   }
 
   function header() {
@@ -95,19 +95,11 @@
     sheet.setRows(detail.sheet.rows);
     setFlags(detail.sheet.flags);
     sheet.setReadOnly(doc.status !== "editing");
-    checks();
     banners();
     toolbar();
     saveState(doc.status === "editing" ? "saved" : "");
     restoreDraft();
     sheet.focus();
-  }
-
-  function checks() {
-    const list = (detail.extraction && detail.extraction.checks) || [];
-    $("#checks").hidden = !list.length;
-    $("#checks").replaceChildren(el("span", { class: "hint", text: "PDF 校验：" }), ...list.map((c) =>
-      el("span", { class: "chip " + (c.ok ? "pass" : "fail"), title: c.detail }, (c.ok ? "✓ " : "✗ ") + c.name + " · " + c.detail)));
   }
 
   // ───────────── banners ─────────────

@@ -27,11 +27,6 @@ body.editor { display: flex; flex-direction: column; overflow: hidden; }
 .banner.err { background: var(--err-bg); color: var(--err); }
 .banner .grow { flex: 1; }
 
-.checks { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 20px; background: var(--panel); border-bottom: 1px solid var(--line); }
-.chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-.chip.pass { color: var(--ok); background: var(--ok-bg); }
-.chip.fail { color: var(--err); background: var(--err-bg); font-weight: 600; }
-
 .fbar { display: flex; align-items: stretch; gap: 0; margin: 8px 20px 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
 .fbar .addr { width: 76px; flex: none; padding: 6px 10px; font: 600 13px Consolas, ui-monospace, monospace; color: var(--muted); border-right: 1px solid var(--line); text-align: center; }
 .fbar .fx { flex: none; padding: 6px 10px; font-style: italic; color: var(--muted); border-right: 1px solid var(--line); }
@@ -98,7 +93,7 @@ body.editor { display: flex; flex-direction: column; overflow: hidden; }
 .drawer li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .drawer li .t { color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) {
-  .docbar, .toolbar, .banner, .checks, .statusbar { padding-left: 10px; padding-right: 10px; }
+  .docbar, .toolbar, .banner, .statusbar { padding-left: 10px; padding-right: 10px; }
   .fbar, .gridwrap { margin-left: 8px; margin-right: 8px; }
   .toolbar .lbl { display: none; }
 }
