@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CIVconvert</title>
+<link rel="stylesheet" href="/static/preview.css">
 <style>
   :root {
     --bg: #f4f6f9; --panel: #ffffff; --text: #19202c; --muted: #5d6676; --line: #dce1e9; --field: #f8f9fb;
@@ -124,6 +125,7 @@
   <div id="out"></div>
 </main>
 
+<script src="/static/preview.js"></script>
 <script>
 (() => {
   const $ = (sel) => document.querySelector(sel);
@@ -203,7 +205,21 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
-  function resultCard(r) {
+  // The preview converts again with the same PDF(s) and the customer found the first time; fetched once per card.
+  function previewLoader(parts, customer) {
+    let pending = null;
+    return () => (pending ??= (async () => {
+      const fd = new FormData();
+      for (const f of parts) fd.append("files", f, f.name);
+      fd.append("customer", customer);
+      const res = await request("/api/preview", { method: "POST", body: fd, headers: authHeaders() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || data.detail || "HTTP " + res.status);
+      return data;
+    })().catch((e) => { pending = null; throw e; }));
+  }
+
+  function resultCard(r, parts) {
     const card = el("section", { class: "panel result" });
     if (r.status === "error") {
       card.append(el("div", { class: "head" }, el("h2", { text: r.sources.join(", ") }), el("span", { class: "badge error", text: "失败" })),
@@ -231,15 +247,19 @@
     }
 
     const actions = el("div", { class: "actions" });
+    const pvBtn = el("button", { type: "button", class: "secondary", text: "Preview 对比预览" });
+    const load = previewLoader(parts, r.customer.id);
+    pvBtn.onclick = () => CIVPreview.open({ title: r.filename, load, download, returnFocus: pvBtn });
     const csvBtn = el("button", { type: "button", class: "primary", text: "下载 CSV" });
     csvBtn.onclick = () => download(r.content_base64, r.filename, "text/csv");
-    actions.append(csvBtn);
+    actions.append(pvBtn, csvBtn);
     if (r.xlsx_base64) {
       const xBtn = el("button", { type: "button", class: "secondary", text: "下载 Excel（核对用）" });
       xBtn.onclick = () => download(r.xlsx_base64, r.xlsx_filename,
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       actions.append(xBtn);
     }
+    if (r.status !== "ok") actions.append(el("span", { class: "hint", text: "需复核：建议先点 Preview，对照原始发票逐行核对" }));
     card.append(actions);
 
     const head = el("tr", {}, ...r.columns.map((c) => el("th", {}, el("span", { class: "col", text: c.letter }), c.header)));
@@ -257,6 +277,7 @@
   async function convert() {
     showError("");
     $("#out").replaceChildren();
+    const sent = files.slice();
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f.name);
     if ($("#customer").value) fd.append("customer", $("#customer").value);
@@ -269,7 +290,9 @@
       const res = await request("/api/convert", { method: "POST", body: fd, headers: authHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || data.detail || "HTTP " + res.status);
-      $("#out").replaceChildren(...data.results.map(resultCard));
+      // one result per PDF, or one result for all of them (merged into one invoice)
+      const separate = data.results.length === sent.length;
+      $("#out").replaceChildren(...data.results.map((r, i) => resultCard(r, separate ? [sent[i]] : sent)));
       $("#status").textContent = "";
     } catch (e) {
       showError("转换失败：" + e.message);

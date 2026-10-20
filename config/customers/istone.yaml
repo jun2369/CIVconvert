@@ -42,6 +42,8 @@ checks:
   line_math: [qty, unit_price, amount] # 每行 数量 x 单价 = 金额
   patterns:
     hs_code: '^\d{4}\.?\d{2}\.?\d{2}\.?(\d{2})?$'
+  consistent:                          # 同一个 Model 出现在多行时，HS Code 必须相同
+    model: [hs_code]
 
 output:
   filename: "CargoWise Input - {source_name}.csv"   # {source_name} = PDF 文件名（不含 .pdf）

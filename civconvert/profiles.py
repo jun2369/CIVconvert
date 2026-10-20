@@ -213,10 +213,15 @@ def _checks(path: Path, d: Any, columns: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(patterns, dict):
         raise ConfigError(f"{path.name}: checks.patterns must map field names to patterns")
     _fields(path, "checks.patterns", list(patterns), columns)
+    consistent = d.get("consistent") or {}
+    if not isinstance(consistent, dict):
+        raise ConfigError(f"{path.name}: checks.consistent must map a field to the fields that must agree, e.g. model: [hs_code]")
+    _fields(path, "checks.consistent", list(consistent), columns)
     return {
         "totals": _fields(path, "checks.totals", d.get("totals"), columns),
         "line_math": line_math,
         "patterns": {f: _regex(path, f"checks.patterns.{f}", p) for f, p in patterns.items()},
+        "consistent": {str(k): _fields(path, f"checks.consistent.{k}", v, columns) for k, v in consistent.items()},
         "min_letters_after_strip": int(d.get("min_letters_after_strip", 3)),
         "ascii_only": bool(d.get("ascii_only", True)),
     }

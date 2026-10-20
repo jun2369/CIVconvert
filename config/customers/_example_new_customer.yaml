@@ -52,6 +52,8 @@ checks:
   line_math: [qty, unit_price, amount]
   patterns:
     hs_code: '^\d{4}\.?\d{2}\.?\d{2}\.?(\d{2})?$'
+  consistent:                           # 同一个 model 出现在多行时，这些字段必须相同 -> 否则提示复核
+    model: [hs_code]
   min_letters_after_strip: 3            # 去中文后英文少于 3 个字母 -> 提示复核
   ascii_only: true                      # 输出含非英文字符 -> 提示复核
 

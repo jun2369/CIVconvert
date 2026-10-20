@@ -41,6 +41,17 @@ class Check:
 
 
 @dataclass
+class Flag:
+    """A problem on one line item, located so the preview can mark the cells."""
+
+    line: int
+    level: str  # error | warning
+    message: str
+    fields: list[str] = field(default_factory=list)  # PDF table fields (model, hs_code …)
+    columns: list[str] = field(default_factory=list)  # template column letters (D, F …)
+
+
+@dataclass
 class OutputColumn:
     index: int
     letter: str
@@ -60,6 +71,8 @@ class Result:
     items: list[dict[str, str]]
     checks: list[Check] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    flags: list[Flag] = field(default_factory=list)
+    parts: list[extract.PdfExtract] = field(default_factory=list, repr=False)  # one per PDF, with row positions
 
     @property
     def needs_review(self) -> bool:
@@ -86,6 +99,7 @@ class Result:
             "line_count": len(self.rows),
             "checks": [asdict(c) for c in self.checks],
             "warnings": self.warnings,
+            "flags": [asdict(f) for f in self.flags],
             "columns": [{"letter": c.letter, "header": c.header, "field": c.spec.field} for c in self.columns],
             "lines": [
                 {
@@ -207,10 +221,23 @@ def _run_checks(
     totals: dict[str, str] | None,
     rows: list[list[str]],
     columns: list[OutputColumn],
-) -> tuple[list[Check], list[str]]:
+    joined: list[int],
+) -> tuple[list[Check], list[str], list[Flag]]:
     cfg = profile.checks
     checks = [Check("Line items", True, f"{len(items)} lines read")]
     warnings: list[str] = []
+    flags: list[Flag] = []
+    letters: dict[str, list[str]] = {}  # field -> template columns filled from it
+    for c in columns:
+        if c.spec.field:
+            letters.setdefault(c.spec.field, []).append(c.letter)
+
+    def flag(n: int, level: str, message: str, fields: list[str], cols: list[str] | None = None, warn: bool = True) -> None:
+        if cols is None:
+            cols = [letter for f in fields for letter in letters.get(f, [])]
+        flags.append(Flag(n, level, message, fields, cols))
+        if warn:
+            warnings.append(f"Line {n}: {message}")
 
     if cfg["totals"]:
         if totals is None:
@@ -234,32 +261,55 @@ def _run_checks(
         bad = []
         for n, item in enumerate(items, 1):
             qty, price, amount = (_decimal(item.get(x)) for x in (q, p, a))
-            # allow rounding of the printed unit price: half a cent per unit
-            if None in (qty, price, amount) or abs(qty * price - amount) > max(Decimal("0.01"), abs(qty) * Decimal("0.005")):
+            if None in (qty, price, amount):
                 bad.append(str(n))
+                flag(n, "error", f"{q} x {p} = {a} cannot be checked: a value is missing or unreadable", [q, p, a], [], warn=False)
+            # allow rounding of the printed unit price: half a cent per unit
+            elif abs(qty * price - amount) > max(Decimal("0.01"), abs(qty) * Decimal("0.005")):
+                bad.append(str(n))
+                flag(n, "error", f"{q} x {p} = {_fmt(qty * price)}, but {a} is {_fmt(amount)}", [q, p, a], [], warn=False)
         detail = f"{q} x {p} = {a} on every line" if not bad else f"does not add up on line(s) {', '.join(bad)}"
         checks.append(Check("Line math", not bad, detail))
 
     for n, item in enumerate(items, 1):
         missing = [f for f in profile.table.required if not item.get(f)]
         if missing:
-            warnings.append(f"Line {n}: {', '.join(missing)} is empty")
+            flag(n, "error", f"{', '.join(missing)} is empty", missing)
         for f, rx in cfg["patterns"].items():
             if item.get(f) and not rx.search(item[f]):
-                warnings.append(f"Line {n}: {f} '{item[f]}' has an unexpected format")
+                flag(n, "warning", f"{f} '{item[f]}' has an unexpected format", [f])
 
     for n, (row, item) in enumerate(zip(rows, items), 1):
         for col in columns:
             value = row[col.index]
+            fields = [col.spec.field] if col.spec.field else []
             raw = item.get(col.spec.field, "") if col.spec.field else ""
             if any(parse_spec(t)[0] == "strip_chinese" for t in col.spec.transforms) and raw:
                 if not value:
-                    warnings.append(f"Line {n}: {col.header} is empty after removing Chinese ('{raw}') – needs an English description")
+                    flag(n, "error", f"{col.header} is empty after removing Chinese ('{raw}') – needs an English description", fields, [col.letter])
                 elif value != raw and len(re.findall(r"[A-Za-z]", value)) < cfg["min_letters_after_strip"]:
-                    warnings.append(f"Line {n}: {col.header} '{value}' looks too short after removing Chinese ('{raw}')")
+                    flag(n, "warning", f"{col.header} '{value}' looks too short after removing Chinese ('{raw}')", fields, [col.letter])
             if cfg["ascii_only"] and value and not value.isascii():
-                warnings.append(f"Line {n}: {col.header} contains non-English characters: '{value}'")
-    return checks, warnings
+                flag(n, "warning", f"{col.header} contains non-English characters: '{value}'", fields, [col.letter])
+
+    # the same model on several lines must have the same HS code (checks.consistent)
+    for key, dependents in cfg["consistent"].items():
+        lines: dict[str, list[int]] = {}
+        for n, item in enumerate(items, 1):
+            if item.get(key):
+                lines.setdefault(item[key], []).append(n)
+        for value, group in lines.items():
+            for f in dependents:
+                for n in group:
+                    mine = items[n - 1].get(f, "")
+                    other = [f"'{items[m - 1].get(f, '')}' on line {m}" for m in group if items[m - 1].get(f, "") != mine]
+                    if other:
+                        flag(n, "warning", f"{key} '{value}' has {f} '{mine}' here but {', '.join(other)}", [key, f])
+
+    for n, count in enumerate(joined, 1):
+        if count:  # already reported by extract as a note
+            flag(n, "warning", f"{count} wrapped row(s) below were joined to this line", profile.table.continuation_fields, warn=False)
+    return checks, warnings, flags
 
 
 def convert(files: list[InputFile], customer: str | None = None, sender: str | None = None) -> Result:
@@ -282,6 +332,7 @@ def convert(files: list[InputFile], customer: str | None = None, sender: str | N
     totals: dict[str, str] | None = None
     document: dict[str, str] = {}
     warnings: list[str] = []
+    parts: list[extract.PdfExtract] = []
     carry, header_seen = None, False
     for f in files:
         try:
@@ -290,6 +341,7 @@ def convert(files: list[InputFile], customer: str | None = None, sender: str | N
             raise ConversionError(str(e)) from e
         if not part.text.strip():
             raise ConversionError(f"{f.name}: the PDF has no text layer (scanned image?) – OCR is not supported yet")
+        parts.append(part)
         header_seen = header_seen or part.header_found
         items.extend(part.items)
         warnings.extend(part.notes)
@@ -324,7 +376,8 @@ def convert(files: list[InputFile], customer: str | None = None, sender: str | N
             row[col.index] = apply_transforms(raw, col.spec.transforms)
         rows.append(row)
 
-    checks, check_warnings = _run_checks(profile, items, totals, rows, columns)
+    joined = [box.joined for part in parts for box in part.rows]
+    checks, check_warnings, flags = _run_checks(profile, items, totals, rows, columns, joined)
     return Result(
         customer=profile,
         template=template,
@@ -336,6 +389,8 @@ def convert(files: list[InputFile], customer: str | None = None, sender: str | N
         items=items,
         checks=checks,
         warnings=warnings + check_warnings,
+        flags=sorted(flags, key=lambda x: x.line),
+        parts=parts,
     )
 
 

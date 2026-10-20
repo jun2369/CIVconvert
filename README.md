@@ -20,6 +20,7 @@
    - 明细的数量、金额合计 = PDF 的 Subtotal 行（确认没有漏行、读错）
    - 每行 数量 × 单价 = 金额
    - HS Code 格式；去中文后描述是否为空/过短；输出是否残留非英文字符
+   - 同一个 Model 出现在多行时 HS Code 是否一致（`checks.consistent`）
 4. **输出** `CargoWise Input - <PDF 文件名>.csv`
    （例：`8100800394 Commercial Invoice.pdf` → `CargoWise Input - 8100800394 Commercial Invoice.csv`）
 
@@ -37,6 +38,25 @@
 `--out-dir 文件夹`、`--xlsx`（同时输出填好的 Excel 供核对）、`--json`。
 
 其他命令：`python -m civconvert customers`（列出客户）、`python -m civconvert check-config`（检查配置）。
+
+## 导出前核对：Preview 对比预览
+
+网页上转换完成后，点结果卡片上的 **Preview 对比预览**，右侧打开对比界面：
+
+- **左边 原始 Invoice**：PDF 页面图片，默认自动裁出明细表格（表头、明细行、Subtotal），可切换“整页”；
+  多页发票用 ‹ › 翻页。左侧编号 = 第几行（= LNO），Σ = Subtotal 行（合计校验通过为绿色，不通过为红色）
+- **右边 转换结果**：把导出的 Excel 读回来显示（列字母、表头、列宽、字体与导出文件一致），
+  重点是目标列 D / E / F；被转换过的单元格（例如去掉了中文）右上角有蓝色小三角，悬停可看 PDF 原文
+- 点任意一行：两边同一行同时高亮并对齐到同一高度；悬停单元格时，另一侧对应单元格也会高亮；
+  底部显示这一行的 PDF 原文、导出结果和校验结果
+- 问题标记：红色 = 错误（空值、数量×单价≠金额、去中文后为空…），黄色 = 警告（HS Code 格式、同一 Model 的 HS Code 不一致…）；
+  顶部“上一个 / 下一个”逐个跳到有问题的行
+- 缩放（− / + / Ctrl+滚轮）、按住拖动、适应宽度、适应窗口、1:1 恢复默认比例、全屏；“同步滚动”打开时两边跟着同一行滚动；
+  窗口较窄时自动改为上下排列（也可以手动切换）
+- 键盘：↑ ↓ 逐行，+ / − / 0 缩放，F 全屏，Esc 关闭；双击右侧单元格复制内容
+
+预览会用相同的 PDF 和客户重新转换一次；预览底部的下载按钮导出的就是正在看的内容。
+扫描件（没有文字层的 PDF）和图片目前不能转换，所以也不能预览（需要 OCR）。
 
 ## 新增客户（不需要改代码）
 
@@ -70,6 +90,9 @@
 | GET | `/api/customers` | 已配置的客户 |
 | POST | `/api/convert` | multipart 上传 `files`（可多个）、可选 `customer`、`merge`；默认直接返回 CSV 文件，`format=json` 返回 JSON |
 | POST | `/api/convert/json` | JSON（base64）进出，给 Power Automate 用 |
+| POST | `/api/preview` | multipart 上传**一张发票**的 PDF（可多个）、可选 `customer`；返回转换结果 + 页面图片、每行在页面上的位置、导出 Excel 的目标列（网页 Preview 用） |
+
+转换结果 JSON 里的 `flags` 是按行、按单元格定位的问题（`line`、`level`、`fields` = PDF 字段、`columns` = 模板列字母）。
 
 设置环境变量 `API_KEY` 后，所有 `/api/*` 请求都需要请求头 `X-API-Key: <key>`（可设多个，用逗号分隔，方便换 key）。
 接口文档：`/docs`。
@@ -159,7 +182,8 @@ civconvert/            代码
   extract.py             PDF 表格读取（pdfplumber）
   transforms.py          字段转换（strip_chinese 等）
   pipeline.py            主流程 + 校验
-  api.py / static/       API 与网页
+  preview.py             Preview 对比预览的数据（页面图片、行位置、读回导出的 Excel）
+  api.py / static/       API 与网页（static/preview.js、preview.css = 对比预览界面）
   cli.py                 命令行
 config/
   customers/*.yaml       客户配置（识别规则、表头、映射、校验）

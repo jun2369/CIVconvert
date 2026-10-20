@@ -7,6 +7,7 @@ Set API_KEY (several keys: comma-separated) to require an X-API-Key header.
 
     POST /api/convert        multipart upload (web page, curl) -> CSV file, or JSON with format=json
     POST /api/convert/json   base64 JSON in/out, accepts Outlook attachments as-is (Power Automate)
+    POST /api/preview        the PDF(s) of one invoice -> result + page images for the review page
 """
 
 import base64
@@ -23,10 +24,11 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
-from . import __version__
-from .pipeline import ConversionError, Failure, InputFile, Result, convert_many
+from . import __version__, preview
+from .pipeline import ConversionError, Failure, InputFile, Result, convert, convert_many
 from .profiles import ConfigError, load_customers
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -41,6 +43,17 @@ if not log.handlers:
     log.setLevel(logging.INFO)
 
 app = FastAPI(title="CIVconvert", version=__version__, description="Commercial Invoice PDF -> CargoWise CSV")
+NO_CACHE = {"Cache-Control": "no-cache"}  # revalidate the page and its scripts, so an update is never half-loaded
+
+
+class _Static(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.update(NO_CACHE)
+        return response
+
+
+app.mount("/static", _Static(directory=STATIC_DIR), name="static")
 
 
 def _api_keys() -> list[str]:
@@ -102,7 +115,7 @@ def _attachment(filename: str) -> dict[str, str]:
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
 
 
 @app.get("/healthz")
@@ -148,6 +161,24 @@ async def convert_upload(
         if errors:
             z.writestr("errors.txt", "\r\n".join(errors))
     return Response(buf.getvalue(), media_type="application/zip", headers=_attachment("CargoWise Input.zip"))
+
+
+@app.post("/api/preview", dependencies=[Depends(require_api_key)])
+async def preview_upload(
+    files: Annotated[list[UploadFile], File(description="the PDF(s) of ONE invoice")],
+    customer: Annotated[str | None, Form()] = None,
+    sender: Annotated[str | None, Form()] = None,
+) -> dict[str, Any]:
+    """Review before export: the conversion result, the invoice pages as images and where each line is on them."""
+    inputs = [InputFile(f.filename or "invoice.pdf", await f.read()) for f in files]
+    _check_limits(inputs)
+    result = await run_in_threadpool(convert, inputs, customer or None, sender or None)
+    _log([result])
+
+    def payload() -> dict[str, Any]:
+        return {"result": result.to_dict(content=True, xlsx=True), "preview": preview.build(result, inputs)}
+
+    return await run_in_threadpool(payload)
 
 
 class FileIn(BaseModel):
