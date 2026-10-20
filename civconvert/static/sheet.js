@@ -5,7 +5,8 @@
      { label, cells: [{id, c, before, after}], del: [{index, row}], ins: [{index, row}] }
    (cells by row id, so actions stay valid while rows move). Only the visible rows are drawn.
    While a formula is typed (in the cell or in opts.formulaBar), clicking / dragging over cells or the arrow
-   keys put their reference in, like in Excel, and the cells it refers to are outlined in colour. */
+   keys put their reference in, like in Excel, and the cells it refers to are outlined in colour.
+   The square at the bottom right of the selection fills by dragging (autofill), like Excel's fill handle. */
 (() => {
   "use strict";
   const F = window.CIVFormula;
@@ -21,6 +22,67 @@
   const div = (cls) => { const d = document.createElement("div"); d.className = cls; return d; };
   const norm = (g) => ({ r1: Math.min(g.r1, g.r2), r2: Math.max(g.r1, g.r2), c1: Math.min(g.c1, g.c2), c2: Math.max(g.c1, g.c2) });
   const content = (text) => (text === "" || text == null ? null : text.startsWith("=") && text.length > 1 ? { f: text } : { v: text });
+
+  // ───────────── autofill rules (the fill handle), like Excel ─────────────
+  // "$20", "-$1,234.50", "20%", "12.5 kg", "Item 7", "INV-007": prefix + (last) number + suffix
+  function unitNumber(text) {
+    const m = /^(.*?)(\d(?:[\d,]*\d)?(?:\.\d+)?)(\D*)$/.exec(text);
+    if (!m) return null;
+    let [, pre, digits, suf] = m;
+    if (digits.includes(",") && !/^\d{1,3}(?:,\d{3})+(?:\.\d+)?$/.test(digits)) return null;
+    let sign = 1;
+    if (pre === "-" || pre === "-$" || pre === "$-") { sign = -1; pre = pre.replace("-", ""); } // "-5", "-$5", "$-5"
+    const plain = digits.replace(/,/g, "");
+    const [int, frac = ""] = plain.split(".");
+    return {
+      pre, suf, value: sign * Number(plain), decimals: frac.length, comma: digits.includes(","),
+      pad: /^0\d/.test(int) ? int.length : 0, // "INV-007" -> "INV-008"
+      numeric: F.numberFromText(text) !== null, // a number to Excel ("$20", "20%"), not text with a number ("Item 7")
+    };
+  }
+
+  function unitText(u, value) {
+    // like the source cells (same decimals), or – uneven steps – as the sheet shows numbers (Excel's General format)
+    const exact = u.decimals !== null && Math.abs(Number(value.toFixed(u.decimals)) - value) <= 1e-9 * Math.max(1, Math.abs(value));
+    const text = exact ? Math.abs(value).toFixed(u.decimals) : F.formatNumber(Math.abs(value));
+    let [int, frac] = text.split(".");
+    if (u.comma) int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    else int = int.padStart(u.pad, "0");
+    const num = frac ? `${int}.${frac}` : int;
+    if (!(value < 0) || Number(text) === 0) return u.pre + num + u.suf;
+    return u.pre === "$" ? `-$${num}${u.suf}` : `${u.pre}-${num}${u.suf}`;
+  }
+
+  /** The fill handle over a line of source cells ({v} / {f} / undefined): a function giving the content at
+      position x (0 = the first source cell; x < 0 = before it). Numbers with the same unit continue as a series
+      ("$10", "$20" -> "$30"; one cell: copied), text ending in a number counts up ("Item 1" -> "Item 2"),
+      everything else is repeated – formulas with their references moved. alt (Ctrl) swaps copy and series. */
+  function fillLine(cells, alt = false, vertical = true) {
+    const n = cells.length;
+    const texts = cells.map((c) => (c ? c.f || c.v || "" : ""));
+    const units = texts.map((t) => (t && !t.startsWith("=") ? unitNumber(t) : null));
+    const sameUnit = units.every((u) => u && u.pre === units[0].pre && u.suf === units[0].suf);
+    let series = sameUnit && (n > 1 || !units[0].numeric);
+    if (alt && sameUnit) series = !series;
+    if (series) {
+      let a = units[0].value, b = 1;
+      if (n > 1) { // the best straight line through the source values (= the step of an even series), as Excel does
+        const mx = (n - 1) / 2, my = units.reduce((s, u) => s + u.value, 0) / n;
+        let sxy = 0, sxx = 0;
+        units.forEach((u, i) => { sxy += (i - mx) * (u.value - my); sxx += (i - mx) ** 2; });
+        b = sxy / sxx;
+        a = my - b * mx;
+      }
+      const decimals = units.every((u) => u.decimals === units[0].decimals) ? units[0].decimals : null;
+      const like = { pre: units[0].pre, suf: units[0].suf, decimals, comma: units.some((u) => u.comma), pad: Math.max(...units.map((u) => u.pad)) };
+      return (x) => ({ v: unitText(like, a + b * x) });
+    }
+    return (x) => {
+      const i = ((x % n) + n) % n, cell = cells[i];
+      if (!cell) return null;
+      return cell.f ? { f: F.shiftFormula(cell.f, vertical ? x - i : 0, vertical ? 0 : x - i) } : { v: cell.v };
+    };
+  }
 
   // Excel's clipboard text: tab-separated, cells with tabs / line breaks / quotes are quoted
   function toTSV(grid) {
@@ -120,6 +182,7 @@
       v.addEventListener("scroll", () => this.schedule(), { passive: true });
       v.addEventListener("mousedown", (e) => this.onMouseDown(e));
       v.addEventListener("dblclick", (e) => {
+        if (e.target.classList.contains("sh-fill")) { this.fillDown(); return; }
         const hit = this.hit(e);
         if (hit && hit.kind === "cell") this.beginEdit("edit");
       });
@@ -654,6 +717,7 @@
       if (e.button !== 0 && e.button !== 2) return;
       const vr = this.view.getBoundingClientRect();
       if (e.clientX - vr.left >= this.view.clientWidth || e.clientY - vr.top >= this.view.clientHeight) return; // scrollbar
+      if (e.button === 0 && e.target.classList.contains("sh-fill")) { this.startFill(e); return; }
       const hit = this.hit(e);
       if (e.target === this.input && this.editing) return; // clicking inside the cell editor
       const fx = hit && hit.kind === "cell" && e.button === 0 ? this.formulaInput() : null;
@@ -708,13 +772,15 @@
       this.trackDrag();
     }
 
-    trackDrag() {
+    trackDrag(onUp) {
       const move = (ev) => this.onDrag(ev);
-      const up = () => {
+      const up = (ev) => {
+        const drag = this.drag;
         this.drag = null;
         cancelAnimationFrame(this.autoScroll);
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
+        if (onUp) onUp(drag, ev);
       };
       window.addEventListener("mousemove", move);
       window.addEventListener("mouseup", up);
@@ -727,6 +793,11 @@
       const r = Math.max(0, Math.min(Math.floor((e.clientY - rect.top) / ROW_H), this.rows.length - 1));
       const c = this.colAt(e.clientX - rect.left);
       if (this.drag.kind === "point") this.pointAt(this.drag.input, this.drag.anchor, { r, c });
+      else if (this.drag.kind === "fill") { // from a few pixels on, so a click or double-click never fills by accident
+        const d = this.drag;
+        d.moved = d.moved || Math.hypot(e.clientX - d.x0, e.clientY - d.y0) >= 5;
+        if (d.moved) this.fillTarget(e.clientX - rect.left, e.clientY - rect.top, r, c);
+      }
       else {
         const g = this.ranges[this.ranges.length - 1];
         if (this.drag.kind === "cell") { g.r2 = r; g.c2 = c; this.focusEnd = { r, c }; }
@@ -753,6 +824,67 @@
       if (this.drag) return;
       const t = e.target.closest(".sh-c");
       this.view.title = t && t.dataset.tip ? t.dataset.tip : "";
+    }
+
+    // ───────────── autofill: the fill handle ─────────────
+    startFill(e) {
+      e.preventDefault();
+      this.input.focus({ preventScroll: true });
+      if (this.readOnly || this.ranges.length !== 1 || !this.rows.length) return;
+      const src = norm(this.ranges[0]);
+      src.r2 = Math.min(src.r2, this.rows.length - 1);
+      this.drag = { kind: "fill", src, target: null, x0: e.clientX, y0: e.clientY, moved: false };
+      this.view.classList.add("sh-filling");
+      this.trackDrag((drag, ev) => {
+        this.view.classList.remove("sh-filling");
+        if (drag && drag.target) this.fill(drag.src, drag.target, ev.ctrlKey);
+        else if (drag && drag.moved) this.renderSelection(); // (a plain click keeps the handle, so a double-click reaches it)
+      });
+    }
+
+    /** While dragging the handle: the source block grows down / up / right / left – whichever way the pointer is further out. */
+    fillTarget(x, y, r, c) {
+      const s = this.drag.src;
+      const top = s.r1 * ROW_H, bottom = (s.r2 + 1) * ROW_H;
+      const left = this.columns[s.c1].x, right = this.columns[s.c2].x + this.columns[s.c2].width;
+      const dy = y > bottom ? y - bottom : y < top ? top - y : 0;
+      const dx = x > right ? x - right : x < left ? left - x : 0;
+      let t = null;
+      if (dy && dy >= dx) t = y > bottom ? { ...s, r2: Math.max(r, s.r2) } : { ...s, r1: Math.min(r, s.r1) };
+      else if (dx) t = x > right ? { ...s, c2: Math.max(c, s.c2) } : { ...s, c1: Math.min(c, s.c1) };
+      if (t && t.r1 === s.r1 && t.r2 === s.r2 && t.c1 === s.c1 && t.c2 === s.c2) t = null;
+      this.drag.target = t;
+      this.renderSelection();
+    }
+
+    /** Fill the cells of target outside src from src (one undo step); then target is selected. */
+    fill(src, target, alt = false) {
+      const vertical = target.r1 !== src.r1 || target.r2 !== src.r2;
+      const changes = [];
+      if (vertical) {
+        for (let c = src.c1; c <= src.c2; c++) {
+          const line = [];
+          for (let r = src.r1; r <= src.r2; r++) line.push(this.rows[r].cells[c]);
+          const at = fillLine(line, alt, true);
+          for (let r = target.r1; r <= target.r2; r++) if (r < src.r1 || r > src.r2) changes.push({ r, c, after: at(r - src.r1) });
+        }
+      } else {
+        for (let r = src.r1; r <= src.r2; r++) {
+          const line = [];
+          for (let c = src.c1; c <= src.c2; c++) line.push(this.rows[r].cells[c]);
+          const at = fillLine(line, alt, false);
+          for (let c = target.c1; c <= target.c2; c++) if (c < src.c1 || c > src.c2) changes.push({ r, c, after: at(c - src.c1) });
+        }
+      }
+      this.setCells(changes, `Fill ${changes.length} cells`);
+      this.selectRange(target.r1, target.c1, target.r2, target.c2);
+    }
+
+    /** Double-click on the fill handle: fill down to the last row. */
+    fillDown() {
+      if (this.readOnly || this.ranges.length !== 1 || !this.rows.length) return;
+      const src = norm(this.ranges[0]);
+      if (src.r2 < this.rows.length - 1) this.fill(src, { ...src, r2: this.rows.length - 1 });
     }
 
     inSelection(r, c) {
@@ -919,6 +1051,12 @@
         if (c1 !== undefined && c2 !== undefined && r2 >= 0) rect({ r1, c1, r2, c2 }, `sh-ref k${i % 6}`);
       });
       if (this.rows.length) rect({ r1: this.active.r, c1: this.active.c, r2: this.active.r, c2: this.active.c }, "sh-act");
+      const filling = this.drag && this.drag.kind === "fill" ? this.drag : null;
+      if (filling && filling.target) rect(filling.target, "sh-filltarget");
+      if (this.rows.length && !this.readOnly && !this.editing && this.ranges.length === 1) { // the fill handle
+        const g = norm(this.ranges[0]), b = this.columns[g.c2];
+        parts.push(`<div class="sh-fill" style="left:${b.x + b.width - 4}px;top:${(Math.min(g.r2, this.rows.length - 1) + 1) * ROW_H - 4}px"></div>`);
+      }
       this.selBox.innerHTML = parts.join("");
       // header highlights
       const rows = new Set(), cols = new Set();
@@ -933,6 +1071,7 @@
   }
 
   Sheet.ROW_H = ROW_H;
+  Sheet.fillLine = fillLine;
   Sheet.parseTSV = parseTSV;
   Sheet.toTSV = toTSV;
   window.CIVSheet = Sheet;

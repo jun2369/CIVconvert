@@ -83,6 +83,10 @@ body.editor { display: flex; flex-direction: column; overflow: hidden; }
 .sh-ref.k4 { border-color: #c26a00; background: rgba(194, 106, 0, .08); }
 .sh-ref.k5 { border-color: #c2307a; background: rgba(194, 48, 122, .08); }
 @keyframes ants { 50% { border-color: #8fb0f0; } }
+/* the fill handle (drag to autofill) and the cells being filled */
+.sh-fill { position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: #1d58d6; border: 1px solid #fff; cursor: crosshair; pointer-events: auto; }
+.sh-filltarget { position: absolute; box-sizing: border-box; border: 2px dashed #7a7a7a; }
+.sh-view.sh-filling, .sh-view.sh-filling * { cursor: crosshair !important; }
 .sh-input { position: absolute; z-index: 5; height: 24px; margin: 0; padding: 0 5px; box-sizing: border-box; border: 0; resize: none; overflow: hidden;
             font: 10pt Arial, "Microsoft YaHei", sans-serif; line-height: 23px; white-space: pre; background: transparent; color: transparent; caret-color: transparent;
             outline: none; opacity: 0; pointer-events: none; }
