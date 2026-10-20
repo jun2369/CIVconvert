@@ -144,13 +144,23 @@
   };
   const key = () => $("#apikey").value.trim();
   const authHeaders = () => (key() ? { "X-API-Key": key() } : {});
+  const OFFLINE = "连接不到转换服务（服务没有在运行）。本地使用：双击 start-local.bat 启动，保持那个黑色窗口不要关，然后刷新本页再试。";
+
+  // fetch() only throws when the server cannot be reached at all (the browser says "Failed to fetch")
+  async function request(url, options) {
+    try {
+      return await fetch(url, options);
+    } catch {
+      throw new Error(OFFLINE);
+    }
+  }
 
   function showError(message) {
     $("#error").replaceChildren(message ? el("div", { class: "msg err", text: message }) : "");
   }
 
   async function loadCustomers() {
-    const res = await fetch("/api/customers", { headers: authHeaders() });
+    const res = await request("/api/customers", { headers: authHeaders() });
     if (res.status === 401) { showError("请填写有效的 API Key"); return; }
     if (!res.ok) { showError("读取客户列表失败：HTTP " + res.status); return; }
     showError("");
@@ -256,7 +266,7 @@
     $("#go").disabled = true;
     $("#status").replaceChildren(el("span", { class: "busy" }), " 正在读取 PDF…");
     try {
-      const res = await fetch("/api/convert", { method: "POST", body: fd, headers: authHeaders() });
+      const res = await request("/api/convert", { method: "POST", body: fd, headers: authHeaders() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || data.detail || "HTTP " + res.status);
       $("#out").replaceChildren(...data.results.map(resultCard));
@@ -282,18 +292,18 @@
     const c = customers.find((x) => x.id === e.target.value);
     $("#merge").checked = !!c && c.multi_file === "merge";
   };
-  $("#apikey").onchange = () => { store.set("civconvert.apikey", key()); loadCustomers(); };
+  $("#apikey").onchange = () => { store.set("civconvert.apikey", key()); loadCustomers().catch((e) => showError(e.message)); };
 
   (async () => {
     $("#apikey").value = store.get("civconvert.apikey");
     try {
-      const info = await (await fetch("/api/info")).json();
+      const info = await (await request("/api/info")).json();
       $("#version").textContent = "v" + info.version;
       $("#keyRow").hidden = !info.auth_required;
       if (info.auth_required && !key()) { showError("请先填写 API Key"); return; }
       await loadCustomers();
     } catch (e) {
-      showError("无法连接服务：" + e.message);
+      showError(e.message);
     }
   })();
 })();
