@@ -68,7 +68,7 @@
     $("#listError").replaceChildren();
     const tbody = $("#rows");
     if (!data.items.length) {
-      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "9", class: "empty" },
+      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "10", class: "empty" },
         state.status || state.q || state.from || state.to ? "没有符合条件的文档" : "还没有文档。上传一份 Commercial Invoice PDF 开始。")));
     } else {
       tbody.replaceChildren(...data.items.map(row));
@@ -96,6 +96,7 @@
     if (d.status === "failed" && d.error) name.append(el("span", { class: "err-line", text: d.error }));
     return el("tr", { onclick: open, title: "打开文档" },
       name,
+      el("td", { text: d.invoice_no || "–" }),
       el("td", {}, ...statusBadges(d)),
       el("td", { class: "num", text: d.status === "editing" || d.status === "confirmed" ? String(d.line_count) : "–" }),
       el("td", { text: d.customer_id || "–" }),
