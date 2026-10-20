@@ -1,31 +1,45 @@
-/* The background of the sign-in page: a globe – the continents as dots – swinging between the Pacific and the
-   Atlantic, with flights from the world's hubs landing one after the other at US gateways (ORD, LAX, JFK …).
-   Canvas 2D, no libraries, ~30 frames a second (slower when the system asks for reduced motion).
-   Land: Natural Earth 110m (public domain) as 2° cells, 90 rows x 180 columns (row i = latitude 89 - 2i,
-   column j = longitude -179 + 2j, bits row by row, most significant first). */
+/* The background of the sign-in page: a globe – the continents as dots, the US as a finer, brighter dot map –
+   swinging between the Pacific and the Atlantic, with flights from the world's hubs landing one after the other
+   where the US gateways are (Chicago, Los Angeles, New York …). Canvas 2D, no libraries, ~30 frames a second
+   (slower when the system asks for reduced motion). Natural Earth 110m (public domain), bits row by row, most
+   significant first: LAND = land in 2° cells, 90 rows x 180 columns (row i = latitude 89 - 2i, column j = longitude
+   -179 + 2j); US = the lower 48 states in 0.5° cells of latitude 24..50, longitude -126..-66, 52 rows x 120 columns. */
 (() => {
   "use strict";
   const canvas = document.getElementById("bg");
   const ctx = canvas && canvas.getContext && canvas.getContext("2d");
   if (!ctx) return;
+  const US = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf////////4AAAAAAAAAEf/////////yEAAAAAAAHf///////////AAAAAAAD////////////4AAAABQD////////////8AAAADwD/////////////AAAADwD/////////////gAAAHwD/////////////4AAAf4D/////////////4AB//8D/////////////4AD//gD/////////////8AH/8AH/////////////4D//4AH/////////////4D//wAH/////////////w///wAD/////////////3///8AD////////////////+AAH////////////////8AAH////////////////wAAD////////////////wAAD///////////////+gAAB////////////////AAAA///////////////7AAAAf//////////////6AAAAf//////////////4AAAAP//////////////8AAAAP//////////////8AAAAH//////////////8AAAAD//////////////8AAAAB//////////////4AAAAAf/////////////gAAAAAH////////////+AAAAAAB////////////8AAAAAAA////////////wAAAAAAAA///////////gAAAAAAAAH/H////////AAAAAAAAAAAD///////+AAAAAAAAAAAA///////+AAAAAAAAAAAA/////gP+AAAAAAAAAAAAef/+/gEfAAAAAAAAAAAAMP/wDAAPAAAAAAAAAAAAAH/gAAAPgAAAAAAAAAAAAD+AAAAHgAAAAAAAAAAAAB8AAAAPgAAAAAAAAAAAAB4AAAAHwAAAAAAAAAAAAA4AAAAHwAAAAAAAAAAAAAYAAAADwAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const LAND = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAf4AP/AAAAAAAAAAAAAAAAAAAAAAAAX/z///+AAAAAAAABAAAAAAAAAAAAAYd8P///wAA+AAAAAA8AAAAAAAAAAAwAnw////4AAIAAAAAAGAAAAAAAAAAADivwAf//wAAAAADAAf/wAHYAAAAAADoi3sAP//gAAAAAMAD///sAAAAgBgACfwz/AD/+gAAAwAEHf8AABADf+AP4EAY2icP8AB///4A//EgAAAAAAAgHwAAAAAAeD4Af///gAFAAgAAAAAAAAzgAAAAAC4H8D/h//BhQAAAAAAAAAAAAP/////4A0B4AAAD5/////////////Af3////gHgA4AAAH5///////////LwAHgH///gHkAAAAAH4/////////+CIAABAB///4D+AAAAGCx/////////4A8AAIAAf///n/gAAAOCD/////////wA4AAAAAf///n/wAAAbP///////////AgAAAAAP/////wAAADf//////////9AAAAAAAF////0YAAAB///////////9AAAAAAAD////8EAAAB///////////5AAAAAAAD////2AAAAB/f5fP//////wAAAAAAAD////gAAAAfxnwPP//////jAAAAAAAD////AAAAAPCb3/n/////+CAAAAAAAD///8AAAAAfALf/n////+ECAAAAAAAB///8AAAAAGHQP/n/////mMAAAAAAAA///8AAAAAH+Ai///////E8AAAAAAAAf//wAAAAAP/AA///////BgAAAAAAAAP//gAAAAAf/73///////gAAAAAAAAAD/AQAAAAAf////f/////gAAAAAAAAAF+AQAAAAB///+/n/////AAAAAAAAAAC+AAAAAAB///+f0H////AAAAAAAAAAAeAwAAAAD////f/B///8gAAAAAAAAAAeGEAAAAH////v+B/z/AAAAAAAAAAAAPMAgAAAD////n+A/B+gAAAAAAAAAAAD8AAAAAD////n4AeB/AgAAAAAAAAAAAPAAAAAH////3gAcAfAgAAAAAAAAAAADAAAAAD////6AAcAfggAAAAAAAAAAABDwAAAD////8wAMATAIAAAAAAAAAAAAr/AAAB/////gAKASAAAAAAAAAAAAAAH/gAAA/////gACAAAIAAAAAAAAAAAAH/8AAAaH///AAAAsGAAAAAAAAAAAAAH/+AAAAB//+AAAAUOAAAAAAAAAAAAAP/+AAAAB//8AAAAYegAAAAAAAAAAAAP//gAAAD//4AAAAMeBgAAAAAAAAAAAP//8AAAB//wAAAAGdiuAAAAAAAAAAAf///AAAA//wAAAACAQHgAAAAAAAAAAP///gAAA//wAAAABwAHwgAAAAAAAAAH///AAAA//wAAAAACIDQIAAAAAAAAAH//+AAAAf/wAAAAAAAAAAAAAAAAAAAD//+AAAA//wgAAAAABxAAAAAAAAAAAD//+AAAA//wgAAAAAPxgBAAAAAAAAAA//8AAAA//jgAAAAAf5gAAAAAAAAAAAf/8AAAA//DgAAAAAf/gAAAAAAAAAAAf/8AAAAf/DAAAAAD//4CAAAAAAAAAAf/wAAAAf/DAAAAAH//4AAAAAAAAAAAf/AAAAAf+CAAAAAH//8AAAAAAAAAAAf/AAAAAP8AAAAAAH//+AAAAAAAAAAA/+AAAAAP8AAAAAAH//+AAAAAAAAAAA/+AAAAAH4AAAAAAD//+AAAAAAAAAAA/8AAAAAHwAAAAAADwf8AAAAAAAAAAA/gAAAAAAAAAAAAACAH4AIAAAAAAAAB/wAAAAAAAAAAAAAAAD4AEAAAAAAAAB+AAAAAAAAAAAAAAAAAAAGAAAAAAAAB6AAAAAAAAAAAAAAAAAwAMAAAAAAAAA8AAAAAAAAAAAAAAAAAQAYAAAAAAAAB4AAAAAAAAAAAAAAAAAAAwAAAAAAAAB4AAAAAAAAAAAAAAAAAAAAAAAAAAAADwAAAAAAAAAACAAAAAAAAAAAAAAAAADgAAAAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAeAAIP+f/gAAAAAAAAAAAMAAAAAAABP/+H//////AAAAAAAAAAA+AAAAAf////8////////AAAAAAAOEAPAAAB///////////////gAAAP//T//8AAAH//////////////+AAAH/////4AAAH///////////////8AAE//////4ABw////////////////8AAAD//////gCA////////////////wAAAf/////////////////////////+AAH/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
   const RAD = Math.PI / 180;
   const vec = (lat, lon) => [Math.cos(lat * RAD) * Math.sin(lon * RAD), Math.sin(lat * RAD), Math.cos(lat * RAD) * Math.cos(lon * RAD)];
 
   // land dots: points spread evenly over the sphere (a Fibonacci lattice, so no rows show) that fall on land; no Antarctica
-  const mask = Uint8Array.from(atob(LAND), (ch) => ch.charCodeAt(0));
+  const bitsOf = (b64) => Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  const mask = bitsOf(LAND), usMask = bitsOf(US);
   const isLand = (row, col) => (mask[(row * 180 + col) >> 3] >> (7 - ((row * 180 + col) & 7))) & 1;
+  const inUS = (lat, lon) => {
+    if (lat < 24 || lat >= 50 || lon < -126 || lon >= -66) return false;
+    const k = Math.floor((50 - lat) / 0.5) * 120 + Math.floor((lon + 126) / 0.5);
+    return ((usMask[k >> 3] >> (7 - (k & 7))) & 1) === 1;
+  };
   const dots = [];
   const N = 12000, GOLDEN = Math.PI * (3 - Math.sqrt(5));
   for (let i = 0; i < N; i++) {
     const y = 1 - (2 * (i + 0.5)) / N, r = Math.sqrt(1 - y * y), x = Math.cos(i * GOLDEN) * r, z = Math.sin(i * GOLDEN) * r;
     const lat = Math.asin(y) / RAD, lon = Math.atan2(x, z) / RAD;
-    if (lat < -56) continue;
+    if (lat < -56 || inUS(lat, lon)) continue; // (the US has its own, finer dots)
     const row = Math.min(89, Math.max(0, Math.floor((90 - lat) / 2))), col = Math.min(179, Math.max(0, Math.floor((lon + 180) / 2)));
     if (isLand(row, col)) dots.push([x, y, z]);
   }
+  // the US: a finer dot map (a honeycomb ~0.7° apart), so where the flights land can be recognised
+  const usDots = [];
+  for (let row = 0, lat = 49.65; lat > 24; row++, lat -= 0.7) {
+    const step = 0.7 / Math.cos(lat * RAD);
+    for (let lon = -125.95 + (row % 2) * (step / 2); lon < -66; lon += step) if (inUS(lat, lon)) usDots.push(vec(lat, lon));
+  }
 
-  // where the flights land (US gateways, labelled) and where they come from
+  // where the flights land (US gateways) and where they come from
   const GATEWAYS = {
     ORD: [41.98, -87.9], LAX: [33.94, -118.41], JFK: [40.64, -73.78], MIA: [25.8, -80.29],
     DFW: [32.9, -97.04], SFO: [37.62, -122.38], ATL: [33.64, -84.43], SEA: [47.45, -122.31],
@@ -131,6 +145,13 @@
       ctx.globalAlpha = 0.18 + 0.72 * z;
       ctx.fillRect(x - 0.9, y - 0.9, 1.8, 1.8);
     }
+    ctx.fillStyle = "#d9e8ff";
+    for (const d of usDots) {
+      const [x, y, z] = view(d);
+      if (z <= 0) continue;
+      ctx.globalAlpha = 0.3 + 0.7 * z;
+      ctx.fillRect(x - 0.8, y - 0.8, 1.6, 1.6);
+    }
     // where flights come from
     ctx.fillStyle = "#ffffff";
     for (const o of origins) {
@@ -150,9 +171,7 @@
       if (fade <= 0) { flights.splice(i, 1); continue; }
       drawFlight(f, p, fade);
     }
-    // the gateways: a pulse, a flash when a flight lands, the airport code
-    ctx.font = "600 12px 'Segoe UI', system-ui, sans-serif";
-    ctx.textBaseline = "middle";
+    // the gateways: a pulse, and a flash when a flight lands
     for (const g of gateways) {
       const [x, y, z] = view(g.p);
       if (z <= 0.05) continue;
@@ -185,9 +204,6 @@
       ctx.beginPath();
       ctx.arc(x, y, 2.4, 0, 2 * Math.PI);
       ctx.fill();
-      ctx.globalAlpha = 0.55 + 0.45 * z;
-      ctx.fillStyle = since < 1300 ? "#ffd2d5" : "#e8f0ff";
-      ctx.fillText(g.code, x + 6, y - 7);
     }
     ctx.globalAlpha = 1;
   }
