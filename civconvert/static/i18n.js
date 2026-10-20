@@ -106,7 +106,7 @@
     "login.dev_submit": "Development login",
     "login.nimbus_off": "Nimbus login is not configured (NIMBUS_API_URL).",
 
-    "dash.page_title": "Dashboard · CIVconvert",
+    "dash.page_title": "Dashboard · NIMBUS CIV CONVERTER",
     "dash.heading": "Dashboard",
     "dash.morning": "Good morning, {name}",
     "dash.afternoon": "Good afternoon, {name}",
@@ -174,7 +174,7 @@
     "confirm.ok": "Complete",
     "preview.open_edit": "Open for editing",
 
-    "ed.page_title": "{name} · CIVconvert",
+    "ed.page_title": "{name} · NIMBUS CIV CONVERTER",
     "ed.back": "← Dashboard",
     "ed.opening": "Opening the document…",
     "ed.processing": "Reading and converting the PDF…",
@@ -488,7 +488,7 @@
     "login.dev_submit": "开发登录",
     "login.nimbus_off": "Nimbus 登录没有配置（NIMBUS_API_URL）。",
 
-    "dash.page_title": "工作面板 · CIVconvert",
+    "dash.page_title": "工作面板 · NIMBUS CIV CONVERTER",
     "dash.heading": "工作面板",
     "dash.morning": "上午好，{name}",
     "dash.afternoon": "下午好，{name}",
@@ -556,7 +556,7 @@
     "confirm.ok": "确认完成",
     "preview.open_edit": "打开编辑",
 
-    "ed.page_title": "{name} · CIVconvert",
+    "ed.page_title": "{name} · NIMBUS CIV CONVERTER",
     "ed.back": "← 工作面板",
     "ed.opening": "正在打开文档…",
     "ed.processing": "正在识别和转换 PDF…",

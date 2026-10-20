@@ -7,11 +7,23 @@
 <script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 <style>
-  :root { --glass: rgba(255, 255, 255, .93); --glass-line: rgba(255, 255, 255, .7); --title: #12306a; }
-  :root[data-theme="dark"] { --glass: rgba(19, 24, 35, .86); --glass-line: rgba(255, 255, 255, .1); --title: #eef3ff; }
+  /* this page keeps its own colours (AGS navy and blue), apart from the violet of the other pages */
+  :root { --glass: rgba(255, 255, 255, .93); --glass-line: rgba(255, 255, 255, .7); --title: #12306a;
+          --text: #19202c; --muted: #5d6676; --line: #dce1e9; --line-strong: #dce1e9; --field: #f8f9fb; --panel: #ffffff;
+          --accent: #1d58d6; --accent-text: #ffffff; --accent-soft: #e7eefe; }
+  :root[data-theme="dark"] { --glass: rgba(19, 24, 35, .86); --glass-line: rgba(255, 255, 255, .1); --title: #eef3ff;
+          --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c; --line-strong: #2b313c; --field: #12161c; --panel: #191d24;
+          --accent: #78a0ff; --accent-text: #0c1322; --accent-soft: #1c2944; }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) { --glass: rgba(19, 24, 35, .86); --glass-line: rgba(255, 255, 255, .1); --title: #eef3ff; }
+    :root:not([data-theme="light"]) { --glass: rgba(19, 24, 35, .86); --glass-line: rgba(255, 255, 255, .1); --title: #eef3ff;
+          --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c; --line-strong: #2b313c; --field: #12161c; --panel: #191d24;
+          --accent: #78a0ff; --accent-text: #0c1322; --accent-soft: #1c2944; }
   }
+  .card .btn { border-radius: 8px; font-weight: 600; }
+  .card .btn.small { font-weight: 500; }
+  .card input { border-radius: 8px; }
+  .card input:hover { border-color: var(--line); }
+  .card input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; box-shadow: none; border-color: var(--line); }
   body { min-height: 100vh; margin: 0; display: grid; place-items: center; padding: 24px 16px; box-sizing: border-box; background: #06142e; overflow-x: hidden; }
   #bg { position: fixed; inset: 0; width: 100%; height: 100%; display: block; z-index: 0; }
   .card { position: relative; z-index: 1; width: min(400px, 100%); box-sizing: border-box; padding: 16px 28px 26px; border-radius: 16px;

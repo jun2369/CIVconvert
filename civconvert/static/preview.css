@@ -1,7 +1,7 @@
 /* Review before export (preview.js): the invoice table next to the filled template columns. */
 :root {
   --pv-desk: #e6e9ee; --pv-paper: #ffffff; --pv-grid: #d4d4d4; --pv-head: #f3f3f3; --pv-head-text: #505050;
-  --pv-sel: rgba(29, 88, 214, .15); --pv-sel-line: #1d58d6; --pv-hover: rgba(29, 88, 214, .08); --pv-hot: #1d58d6;
+  --pv-sel: rgba(105, 65, 232, .15); --pv-sel-line: #6941e8; --pv-hover: rgba(105, 65, 232, .08); --pv-hot: #6941e8;
   --pv-err: #d93025; --pv-err-bg: rgba(217, 48, 37, .15); --pv-err-cell: #fde3e1;
   --pv-warn: #b86e00; --pv-warn-line: #f0a020; --pv-warn-bg: rgba(240, 160, 32, .22); --pv-warn-cell: #fff0cf;
   --pv-ok: #12704a; --pv-info: #2f6fe4;
@@ -91,7 +91,7 @@
 .ov.line { cursor: pointer; }
 .ov.line.hover { background: var(--pv-hover); }
 .ov.line.sel { background: var(--pv-sel); box-shadow: inset 0 0 0 2px var(--pv-sel-line); }
-.ov .c.hot { box-shadow: inset 0 0 0 2px var(--pv-hot); background: rgba(29, 88, 214, .1); }
+.ov .c.hot { box-shadow: inset 0 0 0 2px var(--pv-hot); background: rgba(105, 65, 232, .1); }
 .ov .c.error { box-shadow: inset 0 0 0 2px var(--pv-err); background: var(--pv-err-bg); }
 .ov .c.warning { box-shadow: inset 0 0 0 2px var(--pv-warn-line); background: var(--pv-warn-bg); }
 .ov.line.error:not(.sel) { box-shadow: inset 3px 0 0 var(--pv-err); }
@@ -130,8 +130,8 @@
 .pv-xl td.num { text-align: right; }
 .pv-xl tbody tr { cursor: pointer; }
 .pv-xl tbody tr.hover td:not(.rh) { background-color: #eef3fd; }
-.pv-xl tbody tr.sel td:not(.rh) { background-color: #e1eafc; box-shadow: inset 0 2px 0 var(--pv-sel-line), inset 0 -2px 0 var(--pv-sel-line); }
-.pv-xl tr.hover .rh, .pv-xl tr.sel .rh { background: #d3e3fd; color: #0b3a99; font-weight: 700; }
+.pv-xl tbody tr.sel td:not(.rh) { background-color: #ece5fe; box-shadow: inset 0 2px 0 var(--pv-sel-line), inset 0 -2px 0 var(--pv-sel-line); }
+.pv-xl tr.hover .rh, .pv-xl tr.sel .rh { background: #e7defe; color: #4524b8; font-weight: 700; }
 .pv-xl td.hot { box-shadow: inset 0 0 0 2px var(--pv-hot) !important; }
 .pv-xl td.error { background-color: var(--pv-err-cell) !important; box-shadow: inset 0 0 0 2px var(--pv-err); }
 .pv-xl td.warning { background-color: var(--pv-warn-cell) !important; box-shadow: inset 0 0 0 2px var(--pv-warn-line); }
