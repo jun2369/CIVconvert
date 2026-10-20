@@ -141,7 +141,8 @@ def original(doc_id: str, file_id: int, user: CurrentUser, db: DB) -> Response:
         data = storage.get(row)
     except storage.StorageError as e:
         raise docs.DocumentError(500, "storage_error", str(e), {"error": str(e)}) from e
-    return Response(data, media_type="application/pdf", headers=_attachment(row.filename, inline=True))
+    pdf = (row.content_type or "application/pdf") == "application/pdf"  # an Excel file is downloaded
+    return Response(data, media_type=row.content_type or "application/pdf", headers=_attachment(row.filename, inline=pdf))
 
 
 @router.get("/{doc_id}/preview")

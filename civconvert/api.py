@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from . import __version__, auth, db, documents, documents_api, preview, settings
+from . import __version__, auth, db, documents, documents_api, preview, settings, sources
 from .errors import AppError
 from .pipeline import ConversionError, Failure, InputFile, Result, convert, convert_many
 from .profiles import ConfigError, load_customers
@@ -274,7 +274,7 @@ class ConvertIn(BaseModel):
 def convert_json(body: ConvertIn) -> dict[str, Any]:
     """Power Automate friendly: pass the Outlook trigger's attachments array as `files`.
 
-    Attachments that are not PDFs (logos, signatures) are skipped and listed in `skipped`.
+    Attachments that are neither PDF nor Excel (logos, signatures) are skipped and listed in `skipped`.
     Each result has `filename` and `content_base64` (the CSV) – use base64ToBinary() to save it.
     """
     inputs, skipped = [], []
@@ -283,12 +283,12 @@ def convert_json(body: ConvertIn) -> dict[str, Any]:
             data = base64.b64decode(f.content, validate=False)
         except (binascii.Error, ValueError) as e:
             raise ConversionError(f"{f.name}: content is not valid base64") from e
-        if b"%PDF" in data[:1024]:
+        if sources.kind(f.name, data):
             inputs.append(InputFile(f.name, data))
         else:
             skipped.append(f.name)
     if not inputs:
-        raise ConversionError("No PDF attachment found." + (f" Skipped: {', '.join(skipped)}" if skipped else ""))
+        raise ConversionError("No PDF or Excel attachment found." + (f" Skipped: {', '.join(skipped)}" if skipped else ""))
     _check_limits(inputs)
     results = convert_many(inputs, body.customer or None, body.sender or None, body.merge)
     _log(results)

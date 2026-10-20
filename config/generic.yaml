@@ -1,0 +1,96 @@
+# 通用读取（General reader）：发票（PDF 或 Excel）没有匹配到任何客户配置时使用。
+# 不依赖客户名称或固定版式：按表头的常见写法找出明细表的列，再按位置读出每一行。
+# 有多张表时（装箱单、合同、发票），挑最像发票明细的那张：有 HS / 单价 / 金额的表分数更高，
+# 页面或工作表标题是 "Commercial Invoice" 会加分，"Packing List" / "Contract" 会减分。
+# 遇到新写法的表头，只需在下面对应字段里加一条（正则，不区分大小写），不用改代码。
+id: auto
+name: Auto-detected
+template: cargowise_civ_lines
+
+# 字段 -> 表头写法（正则，越靠前优先级越高）。比较前表头会统一成小写、全角转半角、多个空格变一个
+fields:
+  hs_code:
+    - '^(h\.?\s?s\.?|h\.?t\.?s\.?)(\s*(code|codes|no\.?|number|#))?$'
+    - '\b(hs|hts)\s*(code|no|number|#)|united\s*states\s*hs|\bhts\b|^hs\b|\bhs$'
+    - 'tariff(\s*(code|no\.?|number|#))?$|harmoni[sz]ed|commodity\s*code|customs\s*code|hs编码|海关编码|商品编码|税则号|税号'
+  model:
+    - '^(model|model\s*(no\.?|number|#)|型号)$'
+    - '\bmodel\b'
+    - '\bpart\s*(no\.?|number|#)|^p\s*/\s*n$|^pn$|part#'
+    - '\bitem\s*(no\.?|number|code|#)|^item#$'
+    - 'product\s*(code|no\.?|number|#|id)|\bsku\b|货号|料号|产品编号|产品代码|物料(编码|号)'
+    - '\barticle\b|^art\.?\s*no|\bstyle\b'
+    - 'material\s*(no\.?|number|code|#)'
+    - 'ordering\s*code|customer\s*(pn|part|item)|\bmpn\b'
+  description:
+    - '^(description|desc\.?|goods\s*description|description\s*of\s*goods|product\s*description|item\s*description|commodity\s*description|material\s*description)\b'
+    - 'description|\bdesc\b'
+    - 'commodity|\bgoods\b|product\s*name|item\s*name|name\s*of\s*goods|品名|货物名称|产品名称|描述|名称'
+  qty:
+    - '^(q''?ty|quantity|qnty|数量)(\s*\(?[a-z]{1,6}\)?)?$'
+    - '\bq''?ty\b|quantity|数量'
+  unit_price:
+    - 'unit\s*price|单价|^u\.?\s*price|unit\s*cost|price\s*/\s*unit|price\s*per'
+    - '\bprice\b'
+  amount:
+    - '^(amount|total\s*amount|net\s*amount|line\s*amount|total\s*(value|price)|extended(\s*(price|amount|value))?|金额|总价|总金额)\b'
+    - 'amount|\bvalue\b|^total(\s*\(.*\))?$|金额|总价|总额'
+  origin:
+    - 'country\s*of\s*origin|^origin$|\bcoo\b|made\s*in|产地|原产'
+  line_no:
+    - '^(no\.?|#|item|line|line\s*(no\.?|#)|s\s*/?\s*n|sr\.?\s*no\.?|seq\.?|序号|项次)$'
+  uom:
+    - '^(unit|uom|u\s*/\s*m|um|unit\s*of\s*measure|单位)$'
+  net_weight:
+    - 'net\s*w(eigh)?t|^n\.?\s?w\.?$|净重'
+  gross_weight:
+    - 'gross\s*w(eigh)?t|^g\.?\s?w\.?$|毛重'
+
+# 表头含这些内容时不算该字段（例如 "HTS Description" 不是品名，"Qty / CTN" 不是数量）
+not:
+  hs_code: 'desc|rate|duty|%'
+  model: 'desc|name'
+  description: '\bhts?\b|\bh\.?\s?s\.?\b|tariff|harmoni|\bcode\b|海关|编码'
+  qty: 'carton|ctn|box|pkg|package|pallet|/|\bper\b|price'
+  unit_price: 'total|amount|extended'
+  amount: 'weight|\bwt\b|cbm|volume|qty|quantity|carton|ctn|tax|vat|freight|price\s*/'
+
+# 一张表要算作明细表：必须有 needs 里的列，并且 needs_one_of 的每一组里至少有一列
+needs: [description]
+needs_one_of:
+  - [model, hs_code]
+  - [qty, amount, unit_price]
+# 挑表时每个字段的分数
+weights: { hs_code: 4, model: 3, description: 3, amount: 2, unit_price: 2, qty: 2, origin: 1 }
+invoice_title: 'commercial\s*invoice|\binvoice\b|发票'
+other_title: 'packing\s*(list|slip)|weight\s*list|\bcontract\b|proforma|合同|装箱'
+# 第一格（或一行开头）是这些字 = 明细结束；这一行同时作为合计行用于核对
+total_row: '^(sub\s*-?\s*total|grand\s*total|total|合\s*计|总\s*计|小\s*计)\b'
+
+# 发票级信息（正则，括号内为取值）；{DATE} = 常见的日期写法
+document_fields:
+  invoice_no:
+    - '(?:commercial\s+)?invoice\s*(?:no\.?|number|num\.?|#)\s*[:.#]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - '\binv\.?\s*(?:no\.?|#)\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - '发票号(?:码)?\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+  invoice_date:
+    - 'invoice\s*date\s*[:]?\s*({DATE})'
+    - '(?<![a-z])date\s*[:]\s*({DATE})'
+    - '日期\s*[:]?\s*({DATE})'
+
+# 和客户配置一样：填入模板的列、校验、文件名
+required: [model, description, hs_code]
+mapping:
+  A: { value: "{line_no}", number: true, expect: "LNO" }
+  D: { field: model, expect: "Product Code" }
+  E: { field: description, transforms: [strip_chinese], expect: "Goods Description" }
+  F: { field: hs_code, expect: "Tariff" }
+checks:
+  totals: [qty, amount]
+  line_math: [qty, unit_price, amount]
+  patterns:
+    hs_code: '^\d{4}\.?\d{2}\.?\d{2}\.?(\d{2})?$'
+  consistent:
+    model: [hs_code]
+output:
+  filename: "CargoWise Input - {source_name}.csv"

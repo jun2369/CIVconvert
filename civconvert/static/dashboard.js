@@ -101,7 +101,7 @@
       el("td", { text: d.invoice_no || "–" }),
       el("td", {}, ...statusBadges(d)),
       el("td", { class: "num", text: ready ? String(d.line_count) : "–" }),
-      el("td", { text: d.customer_id || "–" }),
+      el("td", { text: d.customer_id === "auto" ? t("list.auto") : d.customer_id || "–" }),
       el("td", { text: d.created_by ? d.created_by.name : "" }),
       el("td", { text: fmtTime(d.created_at) }),
       el("td", { text: fmtTime(d.updated_at) }),
@@ -166,7 +166,7 @@
     if (!list.length) return;
     if (list.length > 1) { toast(t("upload.one_only"), "err"); return; } // one invoice PDF per upload
     const f = list[0];
-    if (!/\.pdf$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); return; }
+    if (!/\.(pdf|xlsx|xlsm|xls)$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); return; }
     files.splice(0, files.length, f); // a new choice replaces the previous one
     renderFiles();
   }

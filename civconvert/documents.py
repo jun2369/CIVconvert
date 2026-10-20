@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from . import __version__, extract, jobs, preview, settings, storage
+from . import __version__, extract, jobs, preview, settings, sources, storage
 from . import sheet as sheets
 from .db import as_utc, iso, session_scope, utcnow
 from .errors import AppError
@@ -41,7 +41,7 @@ from .models import (
     User,
 )
 from .pipeline import ConversionError, InputFile, Result, convert
-from .profiles import ConfigError, CustomerProfile, load_customers, load_template_profile
+from .profiles import ConfigError, CustomerProfile, find_profile, load_template_profile
 from .template import Template, load_template
 
 log = logging.getLogger("civconvert")
@@ -62,8 +62,7 @@ def audit(db: Session, action: str, user_id: int | None, document: Document | No
 
 
 def _stem(name: str) -> str:
-    base = re.split(r"[\\/]", name)[-1]
-    return re.sub(r"\.pdf$", "", base, flags=re.IGNORECASE)[:255] or "invoice"
+    return sources.strip_extension(re.split(r"[\\/]", name)[-1])[:255] or "invoice"
 
 
 # ───────────────────────────── upload & conversion ─────────────────────────────
@@ -72,17 +71,17 @@ def _stem(name: str) -> str:
 def check_upload(files: list[InputFile]) -> None:
     if not files:
         raise DocumentError(422, "no_files", "No file uploaded")
-    if len(files) > 1:  # one invoice PDF per upload, so files of different invoices are never mixed up
-        raise DocumentError(422, "one_file_only", "Upload one PDF at a time")
+    if len(files) > 1:  # one invoice file per upload, so files of different invoices are never mixed up
+        raise DocumentError(422, "one_file_only", "Upload one file at a time")
     for f in files:
         if len(f.data) > MAX_FILE_MB * 1024 * 1024:
             raise DocumentError(422, "file_too_large", f"{f.name}: larger than {MAX_FILE_MB} MB", {"name": f.name, "mb": MAX_FILE_MB})
-        if b"%PDF" not in f.data[:1024]:
-            raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF file", {"name": f.name})
+        if sources.kind(f.name, f.data) is None:
+            raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF or Excel file", {"name": f.name})
 
 
 def create_document(db: Session, user: User, files: list[InputFile], customer: str | None) -> Document:
-    """The uploaded invoice PDF becomes a document; the conversion runs in the background."""
+    """The uploaded invoice (PDF or Excel) becomes a document; the conversion runs in the background."""
     check_upload(files)
     [f] = files
     now = utcnow()
@@ -92,7 +91,8 @@ def create_document(db: Session, user: User, files: list[InputFile], customer: s
     )
     db.add(doc)
     db.flush()
-    row = DocumentFile(document_id=doc.id, position=0, filename=f.name[:255], content_type="application/pdf", created_at=now)
+    content_type = sources.CONTENT_TYPES[sources.kind(f.name, f.data) or sources.PDF]
+    row = DocumentFile(document_id=doc.id, position=0, filename=f.name[:255], content_type=content_type, created_at=now)
     storage.put(row, f.data)
     db.add(row)
     audit(db, "document.created", user.id, doc, files=[f.name], customer=customer)
@@ -213,9 +213,9 @@ def _template(doc: Document) -> Template:
 
 
 def _profile(doc: Document, template: Template) -> tuple[CustomerProfile | None, list]:
-    """The customer's profile and its mapped columns (None if the profile was removed since)."""
+    """The customer's profile – or the general reader's – and its mapped columns (None if the profile was removed since)."""
     try:
-        profile = load_customers().get(doc.customer_id or "")
+        profile = find_profile(doc.customer_id)
         return (profile, sheets.mapped_columns(profile, template)) if profile else (None, [])
     except ConfigError:
         return None, []

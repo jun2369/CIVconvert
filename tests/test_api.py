@@ -27,6 +27,18 @@ def test_api_key_is_enforced_when_set(monkeypatch):
     assert client.get("/api/customers", headers={"X-API-Key": "secret-2"}).status_code == 200
 
 
+def test_power_automate_excel_attachment(api_key):
+    from test_generic import invoice_xlsx
+
+    body = {"files": [{"name": "invoice.xlsx", "contentBytes": base64.b64encode(invoice_xlsx()).decode()},
+                      {"name": "logo.png", "contentBytes": base64.b64encode(b"\x89PNG\r\n").decode()}]}
+    data = client.post("/api/convert/json", json=body, headers=api_key).json()
+    assert data["skipped"] == ["logo.png"]
+    [result] = data["results"]
+    assert result["filename"] == "CargoWise Input - invoice.csv" and result["customer"]["id"] == "auto"
+    assert base64.b64decode(result["content_base64"]).decode().splitlines()[1].startswith("1,,,MLG0603P2N2BTZ10,INDUCTOR,8504500000,")
+
+
 def test_not_a_pdf_is_a_clear_error(api_key):
     r = client.post("/api/convert", files={"files": ("x.pdf", b"hello", "application/pdf")}, headers=api_key)
     assert r.status_code == 422 and "not a PDF" in r.json()["error"]

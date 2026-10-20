@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import __version__
 from .pipeline import ConversionError, Failure, InputFile, Result, convert_many, resolve_columns
-from .profiles import ConfigError, load_customers, load_template_profile
+from .profiles import ConfigError, load_customers, load_generic, load_template_profile
 from .template import load_template
 
 
@@ -96,6 +96,13 @@ def cmd_check_config(_: argparse.Namespace) -> int:
         except ConfigError as e:
             bad += 1
             print(f"FAIL {p.path.name}: {e}", file=sys.stderr)
+    try:  # the general reader (suppliers without a profile)
+        spec = load_generic()
+        cols = resolve_columns(spec.profile, load_template(load_template_profile(spec.profile.template)))
+        print(f"ok   generic.yaml: {len(spec.synonyms)} fields, {len(cols)} columns -> {', '.join(f'{c.letter} {c.header}' for c in cols)}")
+    except ConfigError as e:
+        bad += 1
+        print(f"FAIL generic.yaml: {e}", file=sys.stderr)
     if not profiles:
         print("no customer profiles found", file=sys.stderr)
     return 1 if bad or not profiles else 0

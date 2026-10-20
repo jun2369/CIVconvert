@@ -1,4 +1,5 @@
-"""A tiny PDF writer for tests: an ISTONE-style invoice table with ruling lines, split over pages."""
+"""A tiny PDF writer for tests: an ISTONE-style invoice table with ruling lines, split over pages, and an
+invoice of another supplier without ruling lines (a packing list first, wrapped descriptions …)."""
 
 from __future__ import annotations
 
@@ -28,7 +29,8 @@ def _table(rows: list[list[str]], top: float) -> list[str]:
     return ops
 
 
-def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14, seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
+def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14, seller: str = "ISTONE INNOVATION LIMITED",
+                header: list[str] | None = None) -> bytes:
     """Page 1 has the title and the first `per_page` lines; later pages repeat the header row."""
     chunks = [lines[i : i + per_page] for i in range(0, len(lines), per_page)] or [[]]
     streams = []
@@ -39,17 +41,20 @@ def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14,
             ops += [_text(200, 800, seller, 14), _text(230, 780, "Commercial Invoice", 12),
                     _text(28, 750, "Invoice No. : T-0001"), _text(330, 750, "Issued Date :2026-10-01")]
             top = 730.0
-        rows = [HEADER, *chunk] + ([subtotal] if p == len(chunks) - 1 else [])
+        rows = [header or HEADER, *chunk] + ([subtotal] if p == len(chunks) - 1 else [])
         ops += _table(rows, top)
         streams.append("\n".join(ops).encode("latin-1"))
+    return _document(streams)
 
+
+def _document(streams: list[bytes], width: int = 595, height: int = 842) -> bytes:
     objs = [b"<< /Type /Catalog /Pages 2 0 R >>"]
     kids = " ".join(f"{4 + 2 * i} 0 R" for i in range(len(streams)))
     objs.append(f"<< /Type /Pages /Kids [{kids}] /Count {len(streams)} >>".encode())
     objs.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")
     for i, s in enumerate(streams):
         objs.append(
-            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * i} 0 R >>".encode()
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * i} 0 R >>".encode()
         )
         objs.append(b"<< /Length %d >>\nstream\n" % len(s) + s + b"\nendstream")
     out = bytearray(b"%PDF-1.4\n")
@@ -84,3 +89,71 @@ def problem_invoice(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
     qty_total = sum(int(r[2]) for r in lines)
     amount_total = sum(int(r[4][3:-3].replace(",", "")) for r in lines)
     return invoice_pdf(lines, ["Subtotal :", "", str(qty_total), "", f"US${amount_total:,}.00", ""], seller=seller)
+
+
+# ── another supplier: no ruling lines, like many ERP printouts ──
+# (x of each column's left edge; numbers end under the right end of their header)
+TEXT_HEADER = [("PO#", 17), ("Item#", 128), ("Description", 213), ("HTS", 368), ("HTS Description", 446),
+               ("Qty", 589), ("Unit Price", 642), ("Amount", 724)]
+
+
+def _right(x_end: float, y: float, text: str, size: int = 8) -> str:
+    return _text(x_end - 0.45 * size * len(text), y, text, size)
+
+
+def text_invoice_pdf(items: list[dict[str, str]], per_page: int = 4, seller: str = "VISTA SPORTS GOODS CO LTD") -> bytes:
+    """Page 1 a packing list (no prices, no HS codes); then the Commercial Invoice: the same block of
+    addresses on every page, the table header only on its first page, every description wrapped onto
+    a second line, the last item's second line moved to the top of the next page, and a "Total :" line
+    under each page – the last one is the grand total.
+
+    items: {po, item, desc, more, hts, hts_desc, qty, price, amount}
+    """
+    w, h = 791, 609
+    streams = []
+    pl = ["0.5 w", _text(250, h - 40, seller, 12), _text(300, h - 70, "PACKING/WEIGHT LIST", 11),
+          _text(14, h - 100, "Packing Slip No: INV-5531"),
+          _text(17, h - 140, "PO#"), _text(128, h - 140, "Item#"), _text(213, h - 140, "Material Description"),
+          _text(520, h - 140, "Qty"), _text(600, h - 140, "Gross Weight")]
+    for i, it in enumerate(items):
+        y = h - 160 - 14 * i
+        pl += [_text(17, y, it["po"]), _text(128, y, it["item"]), _text(213, y, f"{it['desc']} {it['more']}"),
+               _right(540, y, it["qty"]), _right(650, y, "9.62")]
+    streams.append("\n".join(pl).encode("latin-1"))
+
+    pages = [items[i : i + per_page] for i in range(0, len(items), per_page)]
+    carried = None
+    for n, chunk in enumerate(pages):
+        ops = ["0.5 w", _text(211, h - 30, seller, 12), _text(312, h - 110, "Commercial Invoice", 12),
+               _text(496, h - 128, f"Page#:{n + 1} / {len(pages)}"), _text(14, h - 144, "Invoice Number:INV-5531"),
+               _text(496, h - 140, "Date:10/13/2026"), _text(14, h - 168, "Bell Sports, Inc."), _text(14, h - 240, "Text1:")]
+        y = h - 276
+        if n == 0:
+            for label, x in TEXT_HEADER:
+                ops.append(_text(x, y, label))
+            ops += [_text(651, y - 12, "(USD)"), _text(721, y - 12, "(USD)")]
+            y -= 50
+        else:
+            y = h - 272
+        if carried is not None:  # the end of the last description of the page before
+            ops += [_text(213, y, carried["more"]), _text(446, y, "lenses")]
+            y -= 14
+        page_qty = page_amount = 0.0
+        for k, it in enumerate(chunk):
+            ops += [_text(17, y, it["po"]), _text(128, y, it["item"]), _text(213, y, it["desc"]), _text(368, y, it["hts"]),
+                    _text(446, y, it["hts_desc"]), _right(604, y, it["qty"]), _text(608, y, "EA"),
+                    _right(691, y, it["price"]), _right(762, y, it["amount"])]
+            page_qty += float(it["qty"])
+            page_amount += float(it["amount"].replace(",", ""))
+            last = k == len(chunk) - 1 and n < len(pages) - 1
+            if not last:
+                ops += [_text(213, y - 12, it["more"]), _text(446, y - 12, "lenses")]
+            carried = it if last else None
+            y -= 26
+        if n == len(pages) - 1:  # the grand total
+            page_qty = sum(float(i["qty"]) for i in items)
+            page_amount = sum(float(i["amount"].replace(",", "")) for i in items)
+        ops += [_text(213, y - 4, "Total :"), _right(604, y - 4, f"{page_qty:.0f}"), _right(762, y - 4, f"{page_amount:,.2f}")]
+        ops += [_text(14, y - 40, "Manufacturing Location: VISTA SPORTS GOODS CO., LTD.")]
+        streams.append("\n".join(ops).encode("latin-1"))
+    return _document(streams, w, h)

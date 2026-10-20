@@ -1,7 +1,8 @@
-"""Commercial Invoice PDF(s) -> rows of the CargoWise template -> CSV.
+"""Commercial Invoice PDF(s) or Excel file -> rows of the CargoWise template -> CSV.
 
-    profile  = which customer (explicit, by sender e-mail, or by text in the PDF)
-    extract  = line items from the PDF table, located by header text
+    profile  = which customer (explicit, by sender e-mail, or by text in the file); no customer
+               profile, or its table is not in the file: the general reader (generic.py)
+    extract  = line items from the invoice table, located by header text
     mapping  = template column <- item field / value, plus transforms (strip_chinese …)
     checks   = subtotal, qty x price = amount, formats – anything odd becomes a warning
 """
@@ -16,15 +17,23 @@ from typing import Any
 
 from openpyxl.utils import get_column_letter
 
-from . import extract
+from . import extract, generic, sources
 from .export import to_csv, to_xlsx
-from .profiles import ColumnSpec, ConfigError, CustomerProfile, load_customers, load_template_profile
+from .profiles import AUTO_ID, ColumnSpec, ConfigError, CustomerProfile, load_customers, load_generic, load_template_profile
 from .template import Template, load_template, normalize_header
 from .transforms import apply_transforms, parse_spec
 
 
 class ConversionError(Exception):
     """The input cannot be converted (unknown customer, no line items, not a PDF …)."""
+
+
+class NoCustomerMatch(ConversionError):
+    """No customer profile recognises the file (the general reader takes it)."""
+
+
+class TableNotFound(ConversionError):
+    """The customer profile's item table is not in the file (the general reader tries)."""
 
 
 @dataclass
@@ -151,8 +160,7 @@ def _render(pattern: str, values: _Values) -> str:
 
 
 def _stem(name: str) -> str:
-    base = re.split(r"[\\/]", name)[-1]
-    return re.sub(r"\.pdf$", "", base, flags=re.IGNORECASE)
+    return sources.strip_extension(re.split(r"[\\/]", name)[-1])
 
 
 def _safe_filename(name: str) -> str:
@@ -191,7 +199,7 @@ def resolve_customer(
     if len(by_text) == 1:
         return by_text[0]
     if not by_text:
-        raise ConversionError(
+        raise NoCustomerMatch(
             "Could not identify the customer from this PDF. Choose the customer explicitly, "
             "or add detection text to the customer's profile."
         )
@@ -331,19 +339,56 @@ def _run_checks(
     return checks, warnings, flags
 
 
-def convert(files: list[InputFile], customer: str | None = None, sender: str | None = None) -> Result:
-    """One invoice: a single PDF, or several PDFs that are parts of the same invoice."""
+def _file_kinds(files: list[InputFile]) -> list[str]:
     if not files:
         raise ConversionError("No PDF file provided.")
+    kinds = []
     for f in files:
-        if b"%PDF" not in f.data[:1024]:
-            raise ConversionError(f"{f.name}: not a PDF file")
-    profiles = load_customers()
+        kind = sources.kind(f.name, f.data)
+        if kind is None:
+            raise ConversionError(f"{f.name}: not a PDF or Excel file")
+        kinds.append(kind)
+    return kinds
+
+
+def file_text(f: InputFile, kind: str) -> str:
+    """The text of a PDF / the cells of a workbook (to recognise the customer)."""
     try:
-        first_text = extract.read_text(files[0].data, files[0].name)
-    except extract.PdfError as e:
+        if kind == sources.PDF:
+            return extract.read_text(f.data, f.name)
+        return "\n\n".join(g.text() for g in sources.read_workbook(f.data, f.name, kind))
+    except (extract.PdfError, sources.SourceError) as e:
         raise ConversionError(str(e)) from e
-    profile = resolve_customer(profiles, customer, sender, first_text)
+
+
+def convert(files: list[InputFile], customer: str | None = None, sender: str | None = None) -> Result:
+    """One invoice: a single PDF or Excel file, or several PDFs that are parts of the same invoice.
+
+    A customer profile that recognises the file reads it as before. Without one – another supplier,
+    an Excel file, or a layout the profile does not know – the general reader finds the item table.
+    """
+    kinds = _file_kinds(files)
+    profiles = load_customers()
+    first_text = file_text(files[0], kinds[0])
+    profile: CustomerProfile | None
+    if customer == AUTO_ID:
+        profile = None
+    else:
+        try:
+            profile = resolve_customer(profiles, customer, sender, first_text)
+        except NoCustomerMatch:
+            profile = None
+    notes: list[str] = []
+    if profile is not None and all(k == sources.PDF for k in kinds):
+        try:
+            return _convert_with_profile(files, profile)
+        except TableNotFound as e:
+            notes.append(f"{e}; it was read with the general reader instead")
+    return _convert_general(files, kinds, profile, notes)
+
+
+def _convert_with_profile(files: list[InputFile], profile: CustomerProfile) -> Result:
+    """PDFs read with a customer profile (its header texts, its table strategy)."""
     template = load_template(load_template_profile(profile.template))
     columns = resolve_columns(profile, template)
 
@@ -378,13 +423,79 @@ def convert(files: list[InputFile], customer: str | None = None, sender: str | N
 
     names = ", ".join(f.name for f in files)
     if not header_seen:
-        raise ConversionError(
+        raise TableNotFound(
             f"{names}: the item table header ({', '.join(profile.table.required)}) of profile "
             f"'{profile.id}' was not found – the PDF layout does not match this customer's profile"
         )
     if not items:
-        raise ConversionError(f"{names}: the item table was found but it has no line items")
+        raise TableNotFound(f"{names}: the item table was found but it has no line items")
+    return _finish(profile, template, columns, files, items, totals, document, warnings, parts)
 
+
+def _convert_general(files: list[InputFile], kinds: list[str], hint: CustomerProfile | None, notes: list[str]) -> Result:
+    """The general reader (generic.py). `hint`: a customer profile that recognised an Excel file –
+    its header texts are tried first, and its mapping and checks are used."""
+    spec = load_generic()
+    items: list[dict[str, str]] = []
+    totals: dict[str, str] | None = None
+    document: dict[str, str] = {}
+    warnings: list[str] = list(notes)
+    parts: list[extract.PdfExtract] = []
+    carry = None
+    for f, kind in zip(files, kinds):
+        try:
+            if kind == sources.PDF:
+                part, carry = generic.read_pdf(f.data, f.name, spec, carry)
+            else:
+                part = generic.read_excel(f.data, f.name, kind, spec, hint)
+        except (extract.PdfError, sources.SourceError) as e:
+            raise ConversionError(str(e)) from e
+        if kind == sources.PDF and not part.text.strip():
+            raise ConversionError(f"{f.name}: the PDF has no text layer (scanned image?) – OCR is not supported yet")
+        parts.append(part)
+        items.extend(part.items)
+        warnings.extend(part.notes)
+        if part.totals is not None:
+            totals = part.totals
+        found = generic.document_fields(part.text, spec)
+        if hint is not None:
+            for key, rx in hint.document_fields.items():
+                m = rx.search(part.text)
+                if m:
+                    found[key] = m.group(1).strip()
+        for key, value in found.items():
+            if key in document and document[key] != value:
+                warnings.append(f"{key} differs between the files: '{document[key]}' / '{value}' ({f.name})")
+            document.setdefault(key, value)
+
+    names = ", ".join(f.name for f in files)
+    if not any(p.header_found for p in parts):
+        raise ConversionError(
+            f"{names}: no line-item table was found – looked for columns such as Description, HS Code / HTS, "
+            "Qty, Unit Price, Amount (the general reader's settings: config/generic.yaml)"
+        )
+    if not items:
+        raise ConversionError(f"{names}: the item table was found but it has no line items")
+    found_fields = {f for p in parts for f in p.labels}
+    # the customer's (still recognised) or the general profile, with the checks this invoice's columns allow
+    profile = generic.effective(hint if hint is not None else spec.profile, found_fields, totals is not None)
+    template = load_template(load_template_profile(profile.template))
+    columns = resolve_columns(profile, template)
+    return _finish(profile, template, columns, files, items, totals, document, warnings, parts)
+
+
+def _finish(
+    profile: CustomerProfile,
+    template: Template,
+    columns: list[OutputColumn],
+    files: list[InputFile],
+    items: list[dict[str, str]],
+    totals: dict[str, str] | None,
+    document: dict[str, str],
+    warnings: list[str],
+    parts: list[extract.PdfExtract],
+) -> Result:
+    """The template rows of the line items, the checks, and the result."""
     base = {"source_name": _stem(files[0].name), "customer": profile.id, **document}
     rows = []
     for n, item in enumerate(items, 1):
@@ -425,9 +536,10 @@ def convert_many(
         raise ConversionError("No PDF file provided.")
     if merge is None and len(files) > 1:
         try:
-            text = extract.read_text(files[0].data, files[0].name)
+            kind = sources.kind(files[0].name, files[0].data) or sources.PDF
+            text = file_text(files[0], kind)
             merge = resolve_customer(load_customers(), customer, sender, text).multi_file == "merge"
-        except (extract.PdfError, ConversionError):
+        except ConversionError:
             merge = False
     if merge or len(files) == 1:
         return [convert(files, customer, sender)]

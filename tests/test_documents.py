@@ -107,10 +107,46 @@ def test_sheet_structure_is_protected(user_client):
 
 
 def test_failed_conversion_and_retry(user_client):
-    doc = upload(user_client, "unknown seller.pdf", problem_invoice(seller="SOMEONE ELSE LTD"))
-    assert doc["status"] == "failed" and "identify the customer" in doc["error"]
+    doc = upload(user_client, "wrong customer.pdf", problem_invoice(), customer="nobody")
+    assert doc["status"] == "failed" and "Unknown customer" in doc["error"]
     res = user_client.post(f"/api/documents/{doc['id']}/retry", json={"customer": "istone"})
     assert res.json()["document"]["status"] == "editing"
+
+
+def test_another_supplier_is_read_by_the_general_reader(user_client):
+    doc = upload(user_client, "unknown seller.pdf", problem_invoice(seller="SOMEONE ELSE LTD"))
+    assert doc["status"] == "editing" and doc["customer_id"] == "auto" and doc["line_count"] == 26
+    d = detail(user_client, doc["id"])
+    assert d["extraction"]["customer"]["id"] == "auto"
+    assert [c["v"] for c in (d["sheet"]["rows"][0]["cells"][k] for k in ("3", "4", "5"))] == ["CINSM001", "Test Product 1", "9006910001"]
+    # the sheet of such a document is checked like any other (HS code format, empty description …)
+    codes = {f["code"] for f in d["sheet"]["flags"]}
+    assert {"required_empty", "bad_format", "inconsistent_cells"} <= codes
+
+
+def test_excel_invoice_document(user_client):
+    from test_generic import invoice_xlsx
+
+    data = invoice_xlsx()
+    xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    res = user_client.post("/api/documents", files={"files": ("CO-AX invoice.xlsx", data, xlsx)})
+    assert res.status_code == 200, res.text
+    [doc] = res.json()["documents"]
+    assert doc["status"] == "editing" and doc["name"] == "CO-AX invoice" and doc["line_count"] == 3
+    assert doc["invoice_no"] == "880101773" and doc["files"][0]["filename"] == "CO-AX invoice.xlsx"
+    original = user_client.get(f"/api/documents/{doc['id']}/files/{doc['files'][0]['id']}")
+    assert original.status_code == 200 and original.content == data
+    assert original.headers["content-type"].startswith(xlsx) and original.headers["content-disposition"].startswith("attachment")
+    pv = user_client.get(f"/api/documents/{doc['id']}/preview").json()
+    assert pv["preview"]["pages"][0]["image"].startswith("data:image/svg+xml")
+    assert [line["page"] for line in pv["preview"]["lines"]] == [0, 0, 0]
+    csv_text = user_client.post(f"/api/documents/{doc['id']}/export?format=csv").content.decode()
+    assert csv_text.splitlines()[3].startswith("3,,,BEEF-01,FROZEN BEEF (BONELESS),0201300000,")
+
+
+def test_upload_takes_pdf_or_excel_only(user_client):
+    res = user_client.post("/api/documents", files={"files": ("notes.docx", b"PK\x03\x04 not a workbook", "application/octet-stream")})
+    assert res.status_code == 422 and res.json()["code"] == "not_pdf"
 
 
 def test_preview_follows_the_sheet_rows(user_client):
@@ -161,8 +197,8 @@ def test_everyone_only_sees_their_own_documents(app_client):
     login(app_client, "op.one@agslogistics.com")
     assert sorted(names()) == ["problem invoice", "unknown seller"]
     assert names(status="confirmed") == ["problem invoice"]
-    assert names(status="editing") == []
-    assert names(status="attention") == ["unknown seller"]  # failed
+    assert names(status="editing") == ["unknown seller"]  # read by the general reader
+    assert names(status="attention") == ["unknown seller"]  # it has problems to check
     assert names(q="SELLER") == ["unknown seller"]
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     assert names(created_from=tomorrow) == []

@@ -197,7 +197,7 @@
 
     const r = S.result;
     S.title.replaceChildren(r.filename + "  ", el("span", { class: "badge " + (r.status === "ok" ? "ok" : "review"), text: L(r.status === "ok" ? "pv.badge_ok" : "pv.badge_review") }));
-    S.meta.textContent = [r.customer.name, r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
+    S.meta.textContent = [r.customer.id === "auto" ? L("list.auto") : r.customer.name, r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
       L("pv.rows", { n: S.n }), r.sources.join(" + ")].filter(Boolean).join(" · ");
 
     S.src = makePane("src");
@@ -272,7 +272,7 @@
     p.doc = el("div", { class: "pv-doc" }, p.gutter, p.sheet);
     p.view.append(el("div", { class: "pv-stage" }, p.doc));
     const bar = el("div", { class: "pane-bar" },
-      el("span", { class: "pane-title" }, L("pv.original") + " ", el("small", { text: "PDF" })),
+      el("span", { class: "pane-title" }, L("pv.original") + " ", el("small", { text: /\.(xlsx|xlsm|xls)\b/i.test((S.pv.pages[0] || {}).source || "") ? "Excel" : "PDF" })),
       el("span", { class: "pv-group" }, p.prevBtn, p.pageInfo, p.nextBtn),
       el("span", { class: "pv-seg" }, p.tableBtn, p.pageBtn),
       el("span", { class: "pane-sub" }, p.zoomBar));

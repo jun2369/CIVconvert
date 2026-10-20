@@ -1,0 +1,165 @@
+"""The general reader: invoices of suppliers without a customer profile, PDF and Excel."""
+
+import base64
+import io
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+from openpyxl import Workbook
+
+from civconvert import generic, preview
+from civconvert.pipeline import ConversionError, InputFile, convert
+from civconvert.profiles import load_generic
+from pdfgen import invoice_pdf, problem_invoice, text_invoice_pdf
+
+XLS = Path(__file__).resolve().parent / "fixtures" / "invoice.xls"
+
+
+def _dfe(result) -> list[tuple[str, str, str]]:
+    return [(row[3], row[4], row[5]) for row in result.rows]
+
+
+def _text_items() -> list[dict[str, str]]:
+    rows = [("7208948", "GG ARTICLE II CLR REPL", "LENS [CLR]OS 26", "9001.50.0000", "60", "7.5400"),
+            ("7157648", "GG ARTICLE II REPL LENS", "VIV COP 24", "9001.50.0000", "60", "11.7900"),
+            ("7172096", "GG RINGO STK BK V ROY", "26 PAIRS", "9004.90.0090", "48", "13.9400"),
+            ("7110191", "GG RINGO RPL LENS VIV", "JET BLK", "9001.50.0000", "60", "8.9400"),
+            ("7110187", "GG RINGO RPL LENS VIV", "PNK", "9001.50.0000", "12", "11.5500"),
+            ("7133153", "GG RINGO/MILLIE REPL", "LENS VIV SMK 21", "9001.50.0000", "60", "8.9400")]
+    return [{"po": "4500628817", "item": item, "desc": desc, "more": more, "hts": hts, "hts_desc": "sunglasses and",
+             "qty": qty, "price": price, "amount": f"{int(qty) * float(price):,.2f}"} for item, desc, more, hts, qty, price in rows]
+
+
+def test_invoice_without_ruling_lines_over_two_pages():
+    """A packing list first, then the invoice: no lines, wrapped descriptions, the header only on its
+    first page, a description that goes on at the top of the next page, a total under every page."""
+    items = _text_items()
+    r = convert([InputFile("vista.pdf", text_invoice_pdf(items, per_page=4))])
+    assert r.customer.id == "auto"
+    assert _dfe(r) == [(i["item"], f"{i['desc']} {i['more']}", i["hts"]) for i in items]
+    assert [row[0] for row in r.rows] == ["1", "2", "3", "4", "5", "6"]
+    assert r.document == {"invoice_no": "INV-5531", "invoice_date": "10/13/2026"}
+    assert [i["_source"][-3:] for i in r.items] == ["p.2"] * 4 + ["p.3"] * 2  # the packing list (page 1) is not read
+    assert {c.name: c.ok for c in r.checks} == {"Line items": True, "Subtotal qty": True, "Subtotal amount": True, "Line math": True}
+    assert r.warnings == [] and not r.needs_review
+    # the preview finds every line on its page
+    assert [b.page for b in r.parts[0].rows] == [2, 2, 2, 2, 3, 3]
+
+
+def invoice_xlsx() -> bytes:
+    wb = Workbook()
+    contract = wb.active
+    contract.title = "Contract"  # the same goods as a contract: no HS codes – not the invoice
+    contract["B2"] = "CONTRACT"
+    for c, h in enumerate(["ITEM", "Model", "PRODUCT DESCRIPTION", "QUANTITY\nPCS", "UNIT PRICE\nUSD", "NET AMOUNT\nUSD"], 2):
+        contract.cell(row=5, column=c, value=h)
+    for r, row in enumerate([[1, "UC200T-EM", "UC型WCDMA无线通信模块", 300, 8, 2400], [2, "M95", "GSM模块", 700, 2.5, 1750]], 6):
+        for c, v in enumerate(row, 2):
+            contract.cell(row=r, column=c, value=v)
+    inv = wb.create_sheet("Invoice")
+    inv["D3"] = "QUECTEL TEST PTE. LTD.\n6 RAFFLES QUAY SINGAPORE"
+    inv["B4"] = "COMMERCIAL INVOICE"
+    inv["H6"], inv["I6"] = "DATE:", datetime(2026, 10, 15)
+    inv["H7"], inv["I7"] = "INVOICE NO.：", 880101773
+    header = ["ITEM", "Model", "HS CODE", "Ordering Code", "PRODUCT DESCRIPTION（EN）", "QUANTITY\nPCS", "UNIT PRICE\nUSD", "NET AMOUNT\nUSD"]
+    rows = [
+        [1, "MLG0603P2N2BTZ10", 8504500000, "QT0014103066", "INDUCTOR", 495000, 0.0012000000000000001, 594],
+        [2, "0201B271K500NT", 8532241000, "QT0012002690", "电容 CAPACITOR", 30000, 0.00039999999999999996, 11.999999999999998],
+        [3, "BEEF-01", 201300000, "QT1", "FROZEN BEEF", 100, 2.5, 250],  # HS 0201.30 typed as a number
+        [None, None, None, None, "(BONELESS)", None, None, None],  # wrapped description
+        ["TOTAL ", None, None, None, None, 525100, None, 856],
+    ]
+    for c, h in enumerate(header, 2):
+        inv.cell(row=18, column=c, value=h)
+    for r, row in enumerate(rows, 19):
+        for c, v in enumerate(row, 2):
+            inv.cell(row=r, column=c, value=v)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_excel_invoice():
+    r = convert([InputFile("CO-AX invoice.xlsx", invoice_xlsx())])
+    assert r.customer.id == "auto"
+    assert r.filename == "CargoWise Input - CO-AX invoice.csv"
+    assert _dfe(r) == [("MLG0603P2N2BTZ10", "INDUCTOR", "8504500000"),
+                       ("0201B271K500NT", "CAPACITOR", "8532241000"),  # Chinese removed, as for every customer
+                       ("BEEF-01", "FROZEN BEEF (BONELESS)", "0201300000")]  # the lost leading zero is back
+    assert r.items[0]["unit_price"] == "0.0012" and r.items[1]["amount"] == "12"  # no 0.0012000000000000001
+    assert r.document == {"invoice_no": "880101773", "invoice_date": "2026-10-15"}
+    assert all(c.ok for c in r.checks), r.checks
+    assert r.items[0]["_source"].endswith("Invoice row 19")
+
+
+def test_old_excel_format():
+    r = convert([InputFile(XLS.name, XLS.read_bytes())])
+    assert _dfe(r) == [("SR-100", "USB CHARGER 5V", "8504405500"), ("SR-200", "POWER CORD 1.8M", "8544.42.9090"),
+                       ("SR-300", "SWITCH 2 WAY", "8536500000")]
+    assert r.document == {"invoice_no": "SR-2026-118", "invoice_date": "2026-10-09"}
+    assert all(c.ok for c in r.checks), r.checks
+
+
+def test_excel_preview_draws_the_sheet():
+    files = [InputFile("CO-AX invoice.xlsx", invoice_xlsx())]
+    r = convert(files)
+    pv = preview.build(r, files)
+    [page] = pv["pages"]
+    assert page["source"] == "CO-AX invoice.xlsx / Invoice" and page["image"].startswith("data:image/svg+xml;base64,")
+    svg = base64.b64decode(page["image"].split(",", 1)[1]).decode()
+    assert "MLG0603P2N2BTZ10" in svg and "电容 CAPACITOR" in svg and ">19<" in svg  # the cells and the Excel row numbers
+    assert len(pv["lines"]) == 3 and all(line["page"] == 0 and line["bbox"] for line in pv["lines"])
+    assert pv["lines"][2]["bbox"][3] - pv["lines"][2]["bbox"][1] > pv["lines"][0]["bbox"][3] - pv["lines"][0]["bbox"][1]  # with its wrapped row
+    assert pv["totals"]["bbox"] is not None and pv["totals_values"]["amount"] == "856"
+
+
+def test_unknown_supplier_is_read_like_a_known_one():
+    """The same ruled table with another seller's name: the general reader gives what the profile gives."""
+    known = convert([InputFile("a.pdf", problem_invoice())])
+    other = convert([InputFile("a.pdf", problem_invoice(seller="SOMEONE ELSE LTD"))])
+    assert (known.customer.id, other.customer.id) == ("istone", "auto")
+    assert _dfe(other) == _dfe(known)
+    assert [(c.name, c.ok) for c in other.checks] == [(c.name, c.ok) for c in known.checks]
+    assert sorted((f.line, f.code) for f in other.flags) == sorted((f.line, f.code) for f in known.flags)
+
+
+def test_a_known_customer_with_a_new_layout_is_still_read():
+    lines = [[f"P-{n}", f"Part {n}", str(n), "2.00", f"{2 * n:.2f}", "9006910001"] for n in range(1, 4)]
+    pdf = invoice_pdf(lines, ["Subtotal", "", "6", "", "12.00", ""],
+                      header=["Part No.", "Description", "QTY(pcs)", "Unit Price(USD)", "Total (USD)", "HS Code"])
+    r = convert([InputFile("istone new layout.pdf", pdf)])
+    assert r.customer.id == "istone"  # still recognised by its name; the table was found by the general reader
+    assert _dfe(r) == [("P-1", "Part 1", "9006910001"), ("P-2", "Part 2", "9006910001"), ("P-3", "Part 3", "9006910001")]
+    assert any("general reader" in w for w in r.warnings)  # the profile did not fit: the document is checked by a person
+
+
+def test_no_item_table_is_a_clear_error():
+    pdf = invoice_pdf([["a", "b", "c", "d", "e", "f"]], ["", "", "", "", "", ""], seller="NOBODY",
+                      header=["Name", "Address", "Phone", "Fax", "Mail", "Web"])
+    with pytest.raises(ConversionError, match="no line-item table was found"):
+        convert([InputFile("letter.pdf", pdf)])
+
+
+@pytest.mark.parametrize("labels, expected", [
+    (["No.", "Part No.", "Description of Goods", "H.S. Code", "Qty", "Unit Price (USD)", "Amount (USD)"],
+     {"line_no": 0, "model": 1, "description": 2, "hs_code": 3, "qty": 4, "unit_price": 5, "amount": 6}),
+    (["PO#", "Item#", "Description", "HTS", "HTS Description", "Qty", "Unit Price", "Amount"],
+     {"model": 1, "description": 2, "hs_code": 3, "qty": 5, "unit_price": 6, "amount": 7}),
+    (["ITEM", "Model", "HS CODE", "Ordering Code", "PRODUCT DESCRIPTION（EN）", "QUANTITY\nPCS", "UNIT PRICE\nUSD", "NET AMOUNT\nUSD"],
+     {"line_no": 0, "model": 1, "hs_code": 2, "description": 4, "qty": 5, "unit_price": 6, "amount": 7}),
+    (["Model", "Description", "QTY(pcs)", "Unit Price(USD)", "Total (USD)", "United States HS Code"],
+     {"model": 0, "description": 1, "qty": 2, "unit_price": 3, "amount": 4, "hs_code": 5}),
+    (["序号", "型号", "品名", "海关编码", "数量", "单价", "金额"],
+     {"line_no": 0, "model": 1, "description": 2, "hs_code": 3, "qty": 4, "unit_price": 5, "amount": 6}),
+    (["PO#", "Item#", "Material Description", "Qty / CTN", "Qty", "Total Gross Weight"],
+     {"model": 1, "description": 2, "qty": 4, "gross_weight": 5}),
+])
+def test_header_wordings(labels, expected):
+    m = generic.match_labels(labels, load_generic())
+    assert m is not None
+    assert {f: i for f, i in m.fields.items() if f in expected} == expected
+
+
+def test_not_a_header():
+    assert generic.match_labels(["Name", "Address", "Phone", "Description"], load_generic()) is None

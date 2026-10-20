@@ -50,7 +50,7 @@
     $("#title").textContent = doc.name;
     $("#badges").replaceChildren(...statusBadges(doc));
     const ex = detail.extraction || {};
-    $("#meta").textContent = [doc.invoice_no && t("ed.meta_invoice", { no: doc.invoice_no }), doc.invoice_date, ex.customer && ex.customer.name,
+    $("#meta").textContent = [doc.invoice_no && t("ed.meta_invoice", { no: doc.invoice_no }), doc.invoice_date, ex.customer && (ex.customer.id === "auto" ? t("list.auto") : ex.customer.name),
       doc.created_by && t("ed.meta_uploaded", { name: doc.created_by.name, time: fmtTime(doc.created_at) }),
       doc.last_exported_at && t("ed.meta_exported", { time: fmtTime(doc.last_exported_at) }),
       doc.expires_at && t("ed.meta_expires", { date: fmtDate(doc.expires_at) })].filter(Boolean).join(" · ");
@@ -321,6 +321,7 @@
     for (const id of ["#insert", "#delrows", "#clear", "#save", "#confirm"]) $(id).disabled = !editing;
     $("#confirm").hidden = !editing;
     $("#reopen").hidden = doc.status !== "confirmed";
+    fileType();
     $("#save").textContent = t("tb.save") + (dirty() ? " ●" : "");
   }
 
@@ -346,6 +347,10 @@
   $("#reopen").onclick = reopen;
   $("#preview").onclick = (e) => preview(e.currentTarget);
   $("#history").onclick = history;
+  const fileType = () => { // the original file's type on its button: PDF, XLSX …
+    const m = /\.(pdf|xlsx|xlsm|xls)$/i.exec((doc && doc.files[0] && doc.files[0].filename) || "");
+    $("#pdf").textContent = m ? m[1].toUpperCase() : "PDF";
+  };
   $("#pdf").onclick = (e) => {
     const files = doc.files;
     const go = (f) => window.open(`/api/documents/${docId}/files/${f.id}`, "_blank", "noopener");

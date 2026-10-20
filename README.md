@@ -1,27 +1,34 @@
-# CIVconvert — Commercial Invoice PDF → CargoWise CSV
+# CIVconvert — Commercial Invoice PDF / Excel → CargoWise CSV
 
-把客户的 Commercial Invoice（CIV）PDF 直接转换成 CargoWise 导入用的 CSV。
-不再需要在线 PDF→Excel 工具，也不需要手工复制粘贴。
+把 Commercial Invoice（CIV，PDF 或 Excel）直接转换成 CargoWise 导入用的 CSV。
+不再需要在线 PDF→Excel 工具，也不需要手工复制粘贴；任何供应商、任何版式都可以，不需要先为它写配置。
 
 ## 处理流程
 
-1. **读取 PDF**：直接读 PDF 的文字层，按**表头文字**（Model / Description / HS Code …）定位明细表格。
-   结果是确定的——不受在线转换工具、列位置变化的影响。
+1. **读取 PDF 或 Excel**（`.pdf`、`.xlsx` / `.xlsm`、`.xls`）：按**表头文字**定位明细表格，结果是确定的。
+   - 有客户配置的客户（目前 iStone）：按它的配置读，结果和以前完全一样
+   - 其他任何供应商、任何版式：**通用读取**（`config/generic.yaml`）——按表头的常见写法找列：
+     Model / Part No / Item# → 产品编号，Description → 品名，HS / HTS / Tariff → 税号，
+     Qty / Unit Price / Amount 用于校验（中英文写法都认）。同一个文件里有几张表（装箱单、合同、发票）时，
+     挑最像发票明细的那张（有 HS、单价、金额的优先，标题是 Commercial Invoice 的加分）。
+     没有表格线的表按位置读：文字从表头左边开始、数字对齐表头右边；换行的描述会合并到同一行；
+     表格可以跨页（下一页不重复表头也可以），以最后一个 Total 行做合计核对
+   - 客户配置认出了客户、但表格版式变了：自动改用通用读取（并标记“需复核”），不会拒绝
 2. **填入 CargoWise 模板**（模板固定保存在 `config/templates/`，不需要每次上传）：
 
    | 模板列 | 表头 | 内容 |
    |---|---|---|
    | A | LNO | 1…N 连续编号（按实际行数） |
-   | D | Product Code | PDF 的 Model（原样） |
-   | E | Goods Description | PDF 的 Description，删除中文说明，只保留英文 |
-   | F | Tariff | PDF 的 United States HS Code（原样） |
+   | D | Product Code | 发票的 Model / Part No / Item#（原样） |
+   | E | Goods Description | 发票的 Description，删除中文说明，只保留英文 |
+   | F | Tariff | 发票的 HS Code / HTS（原样；Excel 里被存成数字而丢掉的开头 0 会补回） |
 
 3. **自动校验**（不通过不会中断，只标记“需复核”并说明原因）：
    - 明细的数量、金额合计 = PDF 的 Subtotal 行（确认没有漏行、读错）
    - 每行 数量 × 单价 = 金额
    - HS Code 格式；去中文后描述是否为空/过短；输出是否残留非英文字符
    - 同一个 Model 出现在多行时 HS Code 是否一致（`checks.consistent`）
-4. **输出** `CargoWise Input - <PDF 文件名>.csv`
+4. **输出** `CargoWise Input - <文件名>.csv`
    （例：`8100800394 Commercial Invoice.pdf` → `CargoWise Input - 8100800394 Commercial Invoice.csv`）
 
 ## 本地使用（Windows）
@@ -50,7 +57,7 @@
 登录后是本系统自己的会话（HttpOnly cookie，默认 7 天不使用即过期，退出登录立即失效）。
 同一邮箱 15 分钟内输错 5 次会暂时锁定（防止猜密码）。第一次登录时自动建立用户。
 
-**文档**：每次上传**一个** PDF = 一个文档（一张发票，包含它的全部明细行）。一次选多个文件会被拒绝（网页和服务器都会检查），
+**文档**：每次上传**一个**文件（PDF 或 Excel）= 一个文档（一张发票，包含它的全部明细行）。一次选多个文件会被拒绝（网页和服务器都会检查），
 避免不同发票混在一起、分析出错。以前合并上传的多 PDF 文档照常可以打开、编辑和重新转换。
 每个文档保存：原始 PDF、从 PDF 读出的数据、模板表格、发票号、创建人、创建 / 修改时间、状态、导出记录、操作记录和版本快照。
 
@@ -125,12 +132,20 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
   窗口较窄时自动改为上下排列（也可以手动切换）
 - 键盘：↑ ↓ 逐行，+ / − / 0 缩放，F 全屏，Esc 关闭；双击右侧单元格复制内容
 
-左边是保存的原始 PDF，右边是表格**当前**的数据（删除 / 插入行之后也能对上 PDF 原来的行）。
+左边是保存的原始 PDF（Excel 发票则画出读取的那张工作表，带 Excel 的列字母和行号），
+右边是表格**当前**的数据（删除 / 插入行之后也能对上原来的行）。
 扫描件（没有文字层的 PDF）和图片目前不能转换，所以也不能预览（需要 OCR）。
 
-## 新增客户（不需要改代码）
+## 通用读取认不出某种表头时（不需要改代码）
 
-每个客户一个 YAML 文件：`config/customers/<客户代码>.yaml`。
+在 `config/generic.yaml` 里对应字段下加一条写法（正则，不区分大小写），例如某供应商把品名列叫 `Goods Name`：
+在 `description:` 下加 `'goods\s*name'`。`not:` 里是“不算该字段”的写法（例如 `HTS Description` 不是品名）。
+改完提交到 GitHub，部署后生效。
+
+## 新增客户配置（可选，不需要改代码）
+
+一般不需要：没有配置的供应商由通用读取处理。只有某个客户要特殊处理（不同的模板、特别的表头、
+固定的校验）时，才给它加一个 YAML 文件：`config/customers/<客户代码>.yaml`。
 
 1. 复制 `config/customers/_example_new_customer.yaml`（里面有全部选项的说明），改名为 `<客户代码>.yaml`
 2. 修改：
@@ -145,7 +160,7 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 
 ## 一张发票被拆成多个 PDF
 
-- 网页：**每次只能上传一个 PDF**（避免不同发票混在一起），所以网页上不能合并；需要合并时用命令行或 API
+- 网页：**每次只能上传一个文件**（PDF 或 Excel，避免不同发票混在一起），所以网页上不能合并；需要合并时用命令行或 API
 - 命令行：`--merge`；API：`"merge": true`
 - 某个客户总是这样：在其配置里写 `output.multi_file: merge`，默认就合并
 
@@ -158,8 +173,8 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 |---|---|---|
 | GET | `/healthz` | 健康检查 |
 | GET | `/api/customers` | 已配置的客户 |
-| POST | `/api/convert` | multipart 上传 `files`（可多个）、可选 `customer`、`merge`；默认直接返回 CSV 文件，`format=json` 返回 JSON |
-| POST | `/api/convert/json` | JSON（base64）进出，给 Power Automate 用 |
+| POST | `/api/convert` | multipart 上传 `files`（PDF 或 Excel，可多个）、可选 `customer`、`merge`；默认直接返回 CSV 文件，`format=json` 返回 JSON |
+| POST | `/api/convert/json` | JSON（base64）进出，给 Power Automate 用；PDF 和 Excel 附件都处理，其他附件跳过 |
 | POST | `/api/preview` | multipart 上传**一张发票**的 PDF（可多个）、可选 `customer`；返回转换结果 + 页面图片、每行在页面上的位置、导出 Excel 的目标列 |
 | | `/api/auth/*` | 登录（`login`）、退出（`logout`）、当前用户（`me`） |
 | | `/api/documents/*` | 文档：上传、列表 / 筛选、统计、表格保存、导出、Confirm、重新编辑、重新转换、原始 PDF、预览、操作记录、版本（见 `civconvert/documents_api.py`） |
@@ -277,7 +292,9 @@ Docker 镜像里设置了 `REQUIRE_DATABASE_URL=1`：没有设置 `DATABASE_URL`
 
 ```
 civconvert/            代码
-  extract.py             PDF 表格读取（pdfplumber）
+  extract.py             PDF 表格读取（pdfplumber，按客户配置）
+  generic.py             通用读取：任何供应商的 PDF / Excel，自动找明细表
+  sources.py             文件类型（PDF / xlsx / xls）、读 Excel
   transforms.py          字段转换（strip_chinese 等）
   pipeline.py            主流程 + 校验
   preview.py             Preview 对比预览的数据（页面图片、行位置、读回导出的 Excel）
@@ -293,6 +310,7 @@ civconvert/            代码
                          editor.html + editor.js + sheet.js + formula.js（在线表格）、preview.js（对比预览）
   cli.py                 命令行
 config/
+  generic.yaml           通用读取：各字段表头的常见写法、挑表规则、发票号 / 日期
   customers/*.yaml       客户配置（识别规则、表头、映射、校验）
   templates/             CargoWise 模板（xlsx + yaml）
 samples/               本地测试用的真实发票（不进 git）

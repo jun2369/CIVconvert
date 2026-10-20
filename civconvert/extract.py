@@ -64,6 +64,7 @@ class PdfExtract:
     totals: dict[str, str] | None = None
     totals_row: RowBox | None = None
     notes: list[str] = field(default_factory=list)
+    layout: dict | None = None  # Excel: the sheet as drawn for the preview (generic.read_excel)
 
 
 def clean_cell(value: object) -> str:

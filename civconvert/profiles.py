@@ -228,7 +228,10 @@ def _checks(path: Path, d: Any, columns: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_customer(path: Path) -> CustomerProfile:
-    d = _load_yaml(path)
+    return _profile_from(path, _load_yaml(path))
+
+
+def _profile_from(path: Path, d: dict[str, Any]) -> CustomerProfile:
     detect = d.get("detect") or {}
     table = _table(path, d.get("table"))
     doc_fields = {}
@@ -274,6 +277,87 @@ def load_customers() -> dict[str, CustomerProfile]:
             raise ConfigError(f"customer id '{profile.id}' is used by {profiles[profile.id].path.name} and {path.name}")
         profiles[profile.id] = profile
     return profiles
+
+
+AUTO_ID = "auto"  # the general reader (config/generic.yaml): invoices of any supplier, no customer profile
+DATE_PATTERN = (
+    r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}"
+    r"|\d{1,2}[\s-]+[A-Za-z]{3,9}\.?[\s-]+\d{2,4}|[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}"
+)
+
+
+@dataclass
+class GenericSpec:
+    """How the general reader recognises an item table (config/generic.yaml)."""
+
+    profile: CustomerProfile  # mapping, checks, output – like a customer's
+    synonyms: dict[str, list[re.Pattern]]  # field -> header wordings, best first
+    exclude: dict[str, re.Pattern]  # field -> header wordings that are not this field
+    weights: dict[str, int]
+    needs: list[str]
+    needs_one_of: list[list[str]]
+    invoice_title: re.Pattern
+    other_title: re.Pattern
+    total_row: re.Pattern
+    document_fields: dict[str, list[re.Pattern]]
+
+
+def load_generic() -> GenericSpec:
+    path = config_dir() / "generic.yaml"
+    if not path.is_file():
+        raise ConfigError(f"general reader settings not found: {path}")
+    d = _load_yaml(path)
+    fields = d.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        raise ConfigError(f"{path.name}: 'fields' must map field names to lists of header patterns")
+    synonyms = {str(f): [_regex(path, f"fields.{f}", p) for p in _texts(path, f"fields.{f}", ps)] for f, ps in fields.items()}
+    total_row = d.get("total_row") or r"^(sub\s*-?\s*total|grand\s*total|total)\b"
+    # the profile part: the same settings as a customer profile, the table columns being all the wordings of a field
+    table = {
+        "strategy": "text",
+        "columns": {f: "|".join(f"(?:{p.pattern})" for p in ps) for f, ps in synonyms.items()},
+        "required": d.get("required") or ["description"],
+        "stop_row": total_row,
+        "totals_row": total_row,
+        "continuation_rows": {"when_empty": (d.get("required") or ["description"])[0], "append": ["description"]},
+    }
+    profile_d = {"id": d.get("id") or AUTO_ID, "name": d.get("name") or "Auto-detected", "template": d.get("template"),
+                 "table": table, "mapping": d.get("mapping"), "checks": d.get("checks"), "output": d.get("output")}
+    profile = _profile_from(path, profile_d)
+    exclude = {str(f): _regex(path, f"not.{f}", p) for f, p in (d.get("not") or {}).items()}
+    weights = d.get("weights") or {}
+    if not isinstance(weights, dict) or not all(isinstance(v, int) for v in weights.values()):
+        raise ConfigError(f"{path.name}: 'weights' must map field names to whole numbers")
+    needs_one_of = d.get("needs_one_of") or []
+    if not isinstance(needs_one_of, list) or not all(isinstance(g, list) for g in needs_one_of):
+        raise ConfigError(f"{path.name}: 'needs_one_of' must be a list of lists of field names")
+    doc_fields: dict[str, list[re.Pattern]] = {}
+    for key, patterns in (d.get("document_fields") or {}).items():
+        doc_fields[str(key)] = []
+        for p in _texts(path, f"document_fields.{key}", patterns):
+            rx = _regex(path, f"document_fields.{key}", p.replace("{DATE}", DATE_PATTERN))
+            if rx.groups < 1:
+                raise ConfigError(f"{path.name}: document_fields.{key} needs a (group) around the value")
+            doc_fields[str(key)].append(rx)
+    return GenericSpec(
+        profile=profile,
+        synonyms=synonyms,
+        exclude=exclude,
+        weights={str(k): v for k, v in weights.items()},
+        needs=_fields(path, "needs", d.get("needs"), synonyms),
+        needs_one_of=[_fields(path, "needs_one_of", g, synonyms) for g in needs_one_of],
+        invoice_title=_regex(path, "invoice_title", d.get("invoice_title") or r"commercial\s*invoice|\binvoice\b"),
+        other_title=_regex(path, "other_title", d.get("other_title") or r"packing\s*list|\bcontract\b"),
+        total_row=_regex(path, "total_row", total_row),
+        document_fields=doc_fields,
+    )
+
+
+def find_profile(customer_id: str | None) -> CustomerProfile | None:
+    """The profile a document was converted with: a customer's, or the general reader's (AUTO_ID)."""
+    if customer_id == AUTO_ID:
+        return load_generic().profile
+    return load_customers().get(customer_id or "")
 
 
 def load_template_profile(template_id: str) -> TemplateProfile:
