@@ -17,7 +17,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
-from .settings import database_url, env, env_flag
+from .settings import configured_database_url, database_url, env_flag
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 log = logging.getLogger("civconvert")
@@ -63,10 +63,10 @@ def _make_engine(url: str) -> Engine:
 def configure(url: str | None = None) -> Engine:
     """(Re)connect – tests point this at a temporary database."""
     global _engine, _sessions
-    if url is None and env_flag("REQUIRE_DATABASE_URL") and not env("DATABASE_URL"):
+    if url is None and env_flag("REQUIRE_DATABASE_URL") and not configured_database_url():
         # set in the Docker image: a container's own disk is lost on every redeploy
-        raise RuntimeError("DATABASE_URL is not set. In a container the database must be external (e.g. PostgreSQL), "
-                           "or point DATABASE_URL at a file on a mounted volume: sqlite:////data/civconvert.db")
+        raise RuntimeError("DATABASE_URL is not set (POSTGRES_URI is accepted too). In a container the database must be "
+                           "external (e.g. PostgreSQL), or point DATABASE_URL at a file on a mounted volume: sqlite:////data/civconvert.db")
     with _lock:
         if _engine is not None:
             _engine.dispose()

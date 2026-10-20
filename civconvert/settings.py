@@ -30,9 +30,16 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+DATABASE_URL_NAMES = ("DATABASE_URL", "POSTGRES_URI", "POSTGRES_URL")  # the last two: as a linked database addon names it
+
+
+def configured_database_url() -> str:
+    return next((env(n) for n in DATABASE_URL_NAMES if env(n)), "")
+
+
 def database_url() -> str:
     """DATABASE_URL (PostgreSQL in production), else a local SQLite file in data/."""
-    url = env("DATABASE_URL")
+    url = configured_database_url()
     if not url:
         return f"sqlite:///{(PROJECT_DIR / 'data' / 'civconvert.db').as_posix()}"
     # hosting platforms often hand out postgres:// or postgresql:// – use the psycopg 3 driver
