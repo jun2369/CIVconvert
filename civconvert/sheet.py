@@ -196,8 +196,10 @@ def validate(
     flags: list[dict[str, Any]] = []
     header_row = template.profile.header_row
 
-    def flag(line: int, level: str, message: str, columns: list[str] = (), fields: list[str] = ()) -> None:
-        flags.append({"line": line, "level": level, "message": message, "columns": list(columns), "fields": list(fields)})
+    def flag(line: int, level: str, code: str, message: str, columns: list[str] = (), fields: list[str] = (), **params: Any) -> None:
+        # message: English; the web page translates `code` with `params`
+        flags.append({"line": line, "level": level, "code": code, "params": params, "message": message,
+                      "columns": list(columns), "fields": list(fields)})
 
     def value(row: dict[str, Any], col: int) -> str:
         return str(((row.get("cells") or {}).get(str(col)) or {}).get("v", ""))
@@ -206,7 +208,9 @@ def validate(
         for key, cell in (row.get("cells") or {}).items():
             if cell.get("f") and cell.get("v") in ERROR_CODES:
                 letter = get_column_letter(int(key) + 1)
-                flag(n, "error", f"{letter}{header_row + n} 公式结果为错误 {cell['v']}：{cell['f']}", [letter])
+                ref = f"{letter}{header_row + n}"
+                flag(n, "error", "formula_error", f"{ref}: the formula gives {cell['v']} ({cell['f']})", [letter],
+                     cell=ref, value=cell["v"], formula=cell["f"])
         if profile is None:
             continue
         for col in mapped:
@@ -214,14 +218,17 @@ def validate(
             if not f:
                 continue
             v = value(row, col.index)
+            header = col.header.strip()
             if f in profile.table.required and not v.strip():
-                flag(n, "error", f"{col.letter} {col.header.strip()} 为空", [col.letter], [f])
+                flag(n, "error", "required_empty", f"{col.letter} {header} is empty", [col.letter], [f], letter=col.letter, header=header)
                 continue
             rx = profile.checks["patterns"].get(f)
             if rx is not None and v and not rx.search(v):
-                flag(n, "warning", f"{col.letter} {col.header.strip()} '{v}' 格式不符合要求", [col.letter], [f])
+                flag(n, "warning", "bad_format", f"{col.letter} {header} '{v}' has an unexpected format", [col.letter], [f],
+                     letter=col.letter, header=header, value=v)
             if profile.checks["ascii_only"] and v and not v.isascii():
-                flag(n, "warning", f"{col.letter} {col.header.strip()} 含非英文字符：'{v}'", [col.letter], [f])
+                flag(n, "warning", "non_ascii_cell", f"{col.letter} {header} contains non-English characters: '{v}'", [col.letter], [f],
+                     letter=col.letter, header=header, value=v)
 
     if profile is not None:  # the same model must have the same HS code (checks.consistent)
         by_field = {}
@@ -244,10 +251,12 @@ def validate(
                 for k, group in groups.items():
                     for n in group:
                         mine = value(rows[n - 1], dep_col.index)
-                        other = [f"第 {m} 行为 '{value(rows[m - 1], dep_col.index)}'" for m in group if value(rows[m - 1], dep_col.index) != mine]
-                        if other:
-                            flag(n, "warning", f"{key_col.header.strip()} '{k}' 的 {dep_col.header.strip()} 是 '{mine}'，但{'、'.join(other)}",
-                                 [key_col.letter, dep_col.letter], [key, dep])
+                        others = [{"row": m, "value": value(rows[m - 1], dep_col.index)} for m in group if value(rows[m - 1], dep_col.index) != mine]
+                        if others:
+                            key_h, dep_h = key_col.header.strip(), dep_col.header.strip()
+                            text = ", ".join(f"'{o['value']}' on row {o['row']}" for o in others)
+                            flag(n, "warning", "inconsistent_cells", f"{key_h} '{k}' has {dep_h} '{mine}' here, but {text}",
+                                 [key_col.letter, dep_col.letter], [key, dep], key_header=key_h, key=k, dep_header=dep_h, mine=mine, others=others)
 
     # problems that only the PDF shows (qty x price, wrapped rows): stay with the row that came from that line
     if extraction:
@@ -258,8 +267,10 @@ def validate(
         for f in extraction.get("flags") or []:
             if f.get("columns"):
                 continue  # about a template cell: checked above on the current value
+            inner = {"code": f.get("code", ""), "params": f.get("params") or {}, "message": f.get("message", "")}
             for n in by_src.get(f.get("line"), []):
-                flag(n, f.get("level", "warning"), f"PDF 第 {f['line']} 行：{f['message']}", [], f.get("fields") or [])
+                flag(n, f.get("level", "warning"), "pdf_line", f"PDF line {f['line']}: {inner['message']}", [], f.get("fields") or [],
+                     pdf_line=f["line"], inner=inner)
     flags.sort(key=lambda x: x["line"])
     return flags
 

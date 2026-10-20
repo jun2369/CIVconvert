@@ -55,7 +55,7 @@ def test_nimbus_login_creates_the_user_and_a_session(app_client, nimbus):
 def test_wrong_password_and_rate_limit(app_client, nimbus):
     for _ in range(5):
         res = app_client.post("/api/auth/login", json={**GOOD, "password": "nope"})
-        assert res.status_code == 401 and res.json()["detail"] == "邮箱或密码不正确"
+        assert res.status_code == 401 and res.json()["code"] == "wrong_credentials"
     res = app_client.post("/api/auth/login", json=GOOD)  # even the right password waits now
     assert res.status_code == 429 and "Retry-After" in res.headers
     assert len(nimbus["calls"]) == 5

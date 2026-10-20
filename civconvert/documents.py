@@ -9,6 +9,7 @@ log all hang off documents.id.
 
 from __future__ import annotations
 
+import calendar
 import copy
 import hashlib
 import logging
@@ -17,12 +18,13 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
-from . import __version__, extract, jobs, preview, storage
+from . import __version__, extract, jobs, preview, settings, storage
 from . import sheet as sheets
 from .db import as_utc, iso, session_scope, utcnow
+from .errors import AppError
 from .models import (
     CONFIRMED,
     EDITING,
@@ -52,10 +54,8 @@ STUCK_AFTER = timedelta(minutes=10)  # a conversion never takes this long: the s
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-class DocumentError(Exception):
-    def __init__(self, status: int, message: str, extra: dict[str, Any] | None = None):
-        super().__init__(message)
-        self.status, self.message, self.extra = status, message, extra or {}
+class DocumentError(AppError):
+    """A document action that cannot be done (status, code for the page, English message)."""
 
 
 def audit(db: Session, action: str, user_id: int | None, document: Document | None = None, **detail: Any) -> None:
@@ -72,14 +72,14 @@ def _stem(name: str) -> str:
 
 def check_upload(files: list[InputFile]) -> None:
     if not files:
-        raise DocumentError(422, "没有上传文件")
+        raise DocumentError(422, "no_files", "No file uploaded")
     if len(files) > MAX_FILES:
-        raise DocumentError(422, f"一次最多上传 {MAX_FILES} 个文件")
+        raise DocumentError(422, "too_many_files", f"At most {MAX_FILES} files at a time", {"max": MAX_FILES})
     for f in files:
         if len(f.data) > MAX_FILE_MB * 1024 * 1024:
-            raise DocumentError(422, f"{f.name}：文件大于 {MAX_FILE_MB} MB")
+            raise DocumentError(422, "file_too_large", f"{f.name}: larger than {MAX_FILE_MB} MB", {"name": f.name, "mb": MAX_FILE_MB})
         if b"%PDF" not in f.data[:1024]:
-            raise DocumentError(422, f"{f.name}：不是 PDF 文件")
+            raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF file", {"name": f.name})
 
 
 def _groups(files: list[InputFile], customer: str | None, merge: bool | None) -> list[list[InputFile]]:
@@ -154,7 +154,7 @@ def process(doc_id: str) -> None:
             return
         except Exception as e:  # never leave a document "processing"
             log.exception("converting document %s failed", doc_id)
-            _fail(db, doc, f"内部错误 {e.__class__.__name__}: {e}")
+            _fail(db, doc, f"Internal error {e.__class__.__name__}: {e}")
             return
         _store(db, doc, result)
         log.info("document %s converted: %s, %d lines", doc.id, result.customer.id, len(result.rows))
@@ -195,7 +195,7 @@ def expire_stuck(db: Session) -> int:
     res = db.execute(
         update(Document)
         .where(Document.status == PROCESSING, Document.updated_at < utcnow() - STUCK_AFTER)
-        .values(status=FAILED, error="处理被中断（服务重启），请点'重新转换'", updated_at=utcnow())
+        .values(status=FAILED, error="Processing was interrupted (server restart) – convert it again", updated_at=utcnow())
     )
     db.commit()
     return res.rowcount or 0
@@ -203,7 +203,7 @@ def expire_stuck(db: Session) -> int:
 
 def retry(db: Session, doc: Document, user: User, customer: str | None) -> Document:
     if doc.status != FAILED:
-        raise DocumentError(409, "只有处理失败的文档可以重新转换")
+        raise DocumentError(409, "retry_only_failed", "Only a failed document can be converted again")
     doc.status, doc.error, doc.updated_at, doc.updated_by = PROCESSING, None, utcnow(), user.id
     doc.options = {**(doc.options or {}), "customer": customer}
     audit(db, "conversion.retried", user.id, doc, customer=customer)
@@ -215,10 +215,11 @@ def retry(db: Session, doc: Document, user: User, customer: str | None) -> Docum
 # ───────────────────────────── the sheet ─────────────────────────────
 
 
-def get_document(db: Session, doc_id: str) -> Document:
+def get_document(db: Session, doc_id: str, user: User) -> Document:
+    """A document of this user – everyone only sees and changes their own documents."""
     doc = db.get(Document, doc_id)
-    if doc is None:
-        raise DocumentError(404, "文档不存在")
+    if doc is None or doc.created_by != user.id:
+        raise DocumentError(404, "not_found", "Document not found")
     return doc
 
 
@@ -226,7 +227,7 @@ def _template(doc: Document) -> Template:
     try:
         return load_template(load_template_profile(doc.template_id or ""))
     except ConfigError as e:
-        raise DocumentError(500, f"模板 '{doc.template_id}' 无法读取：{e}") from e
+        raise DocumentError(500, "template_unreadable", f"Template '{doc.template_id}' cannot be read: {e}", {"template": doc.template_id, "error": str(e)}) from e
 
 
 def _profile(doc: Document, template: Template) -> tuple[CustomerProfile | None, list]:
@@ -247,26 +248,26 @@ def _sheet(db: Session, doc: Document, lock: bool = False) -> DocumentSheet:
     query = select(DocumentSheet).where(DocumentSheet.document_id == doc.id)
     sh = db.scalar(query.with_for_update() if lock else query)
     if sh is None:
-        raise DocumentError(409, "这份文档还没有表格数据")
+        raise DocumentError(409, "no_sheet", "This document has no sheet yet")
     return sh
 
 
 def save_sheet(db: Session, doc: Document, user: User, rows_in: Any, revision: int | None, reason: str = "auto", force: bool = False) -> dict[str, Any]:
     if doc.status == CONFIRMED:
-        raise DocumentError(409, "文档已确认（只读）。需要修改请先点'重新编辑'", {"status": doc.status})
+        raise DocumentError(409, "completed_readonly", "The document is completed (read-only) – reopen it to make changes", extra={"status": doc.status})
     if doc.status != EDITING:
-        raise DocumentError(409, "文档当前不能编辑", {"status": doc.status})
+        raise DocumentError(409, "not_editable", "The document cannot be edited now", extra={"status": doc.status})
     sh = _sheet(db, doc, lock=True)  # one save at a time per document
     if not force and revision != sh.revision:
         who = db.get(User, sh.updated_by) if sh.updated_by else None
-        raise DocumentError(409, "这份文档已在别处被修改", {
+        raise DocumentError(409, "conflict", "This document was changed elsewhere", extra={
             "conflict": True, "revision": sh.revision, "updated_by": who.name if who else None, "updated_at": iso(sh.updated_at),
         })
     template = _template(doc)
     try:
         rows = sheets.clean_rows(rows_in, len(template.headers))
     except sheets.SheetError as e:
-        raise DocumentError(400, f"表格数据无效：{e}") from e
+        raise DocumentError(400, "invalid_sheet", f"Invalid sheet data: {e}", {"error": str(e)}) from e
     sheets.compute(rows, template)
     change = sheets.diff(sh.rows or [], rows)
     if rows == sh.rows:  # nothing changed (e.g. Save pressed twice)
@@ -311,12 +312,12 @@ def _log_save(db: Session, doc: Document, user: User, reason: str, change: dict[
 def export(db: Session, doc: Document, user: User, fmt: str = "csv", revision: int | None = None) -> tuple[str, bytes, str]:
     """The current sheet as the CargoWise CSV (or Excel) – same writer, headers and column order as before."""
     if doc.status not in (EDITING, CONFIRMED):
-        raise DocumentError(409, "这份文档还没有可导出的数据")
+        raise DocumentError(409, "nothing_to_export", "This document has nothing to export yet")
     if fmt not in ("csv", "xlsx"):
-        raise DocumentError(400, "format must be csv or xlsx")
+        raise DocumentError(400, "bad_format", "format must be csv or xlsx")
     sh = _sheet(db, doc)
     if revision is not None and revision != sh.revision:
-        raise DocumentError(409, "表格还有未保存的修改，请先保存再导出", {"revision": sh.revision})
+        raise DocumentError(409, "unsaved_export", "The sheet has unsaved changes – save before exporting", extra={"revision": sh.revision})
     template = _template(doc)
     _, mapped = _profile(doc, template)
     rows = copy.deepcopy(sh.rows or [])
@@ -342,10 +343,10 @@ def export(db: Session, doc: Document, user: User, fmt: str = "csv", revision: i
 
 def confirm(db: Session, doc: Document, user: User, revision: int | None) -> Document:
     if doc.status != EDITING:
-        raise DocumentError(409, "只有编辑中的文档可以确认")
+        raise DocumentError(409, "confirm_only_editing", "Only a document being edited can be completed")
     sh = _sheet(db, doc)
     if revision is not None and revision != sh.revision:
-        raise DocumentError(409, "表格还有未保存的修改，请先保存再确认", {"revision": sh.revision})
+        raise DocumentError(409, "unsaved_confirm", "The sheet has unsaved changes – save before completing it", extra={"revision": sh.revision})
     now = utcnow()
     doc.status, doc.confirmed_at, doc.confirmed_by, doc.updated_at, doc.updated_by = CONFIRMED, now, user.id, now, user.id
     db.add(SheetVersion(document_id=doc.id, revision=sh.revision, rows=sh.rows, reason="confirm", created_by=user.id, created_at=now))
@@ -356,7 +357,7 @@ def confirm(db: Session, doc: Document, user: User, revision: int | None) -> Doc
 
 def reopen(db: Session, doc: Document, user: User) -> Document:
     if doc.status != CONFIRMED:
-        raise DocumentError(409, "只有已确认的文档需要重新编辑")
+        raise DocumentError(409, "reopen_only_completed", "Only a completed document can be reopened")
     now = utcnow()
     doc.status, doc.confirmed_at, doc.confirmed_by, doc.updated_at, doc.updated_by = EDITING, None, None, now, user.id
     audit(db, "document.reopened", user.id, doc)
@@ -373,11 +374,9 @@ def _like(q: str) -> str:
 
 def list_documents(
     db: Session, user: User, *, status: str | None = None, q: str | None = None, created_from: datetime | None = None,
-    created_to: datetime | None = None, mine: bool = True, page: int = 1, page_size: int = 50,
+    created_to: datetime | None = None, page: int = 1, page_size: int = 50,
 ) -> dict[str, Any]:
-    query = select(Document)
-    if mine:
-        query = query.where(Document.created_by == user.id)
+    query = select(Document).where(Document.created_by == user.id)  # only one's own documents
     if status == "attention":  # failed, or needs a check
         query = query.where(or_(Document.status == FAILED, and_(Document.status == EDITING, Document.needs_review.is_(True))))
     elif status == "review":
@@ -400,8 +399,8 @@ def list_documents(
     return {"items": [doc_json(d) for d in docs], "total": total, "page": page, "page_size": page_size}
 
 
-def stats(db: Session, user: User, mine: bool, since: datetime | None) -> dict[str, int]:
-    scope = [Document.created_by == user.id] if mine else []
+def stats(db: Session, user: User, since: datetime | None = None) -> dict[str, int]:
+    scope = [Document.created_by == user.id]
     counts = {s: 0 for s in STATUSES}
     review = 0
     for status, flagged, n in db.execute(
@@ -420,6 +419,41 @@ def stats(db: Session, user: User, mine: bool, since: datetime | None) -> dict[s
         "attention": counts[FAILED] + review,
         "exported": exported or 0,
     }
+
+
+# ───────────────────────────── retention ─────────────────────────────
+
+
+def months_before(when: datetime, months: int) -> datetime:
+    """The same day `months` calendar months earlier (later for negative months), clamped to the month's end."""
+    y, m = divmod(when.month - 1 - months, 12)
+    year, month = when.year + y, m + 1
+    return when.replace(year=year, month=month, day=min(when.day, calendar.monthrange(year, month)[1]))
+
+
+def expires_at(doc: Document) -> datetime | None:
+    months = settings.retention_months()
+    return months_before(as_utc(doc.created_at), -months) if months and doc.created_at else None
+
+
+def purge_expired(db: Session, now: datetime | None = None) -> int:
+    """Delete documents uploaded more than DOCUMENT_RETENTION_MONTHS ago, with everything that belongs to
+    them (PDFs, sheet, versions, exports, log – the database cascades), to keep the database small."""
+    months = settings.retention_months()
+    if not months:
+        return 0
+    cutoff = months_before(now or utcnow(), months)
+    ids = list(db.scalars(select(Document.id).where(Document.created_at < cutoff)))
+    for start in range(0, len(ids), 500):
+        batch = ids[start : start + 500]
+        for f in db.scalars(select(DocumentFile).where(DocumentFile.document_id.in_(batch), DocumentFile.storage != "db")):
+            storage.delete(f)
+        db.execute(delete(Document).where(Document.id.in_(batch)))
+    if ids:
+        audit(db, "documents.purged", None, None, count=len(ids), uploaded_before=iso(cutoff))
+        log.info("deleted %d document(s) uploaded before %s (kept %d months)", len(ids), iso(cutoff), months)
+    db.commit()
+    return len(ids)
 
 
 # ───────────────────────────── JSON ─────────────────────────────
@@ -446,6 +480,7 @@ def doc_json(doc: Document) -> dict[str, Any]:
         "confirmed_at": iso(doc.confirmed_at),
         "last_exported_at": iso(doc.last_exported_at),
         "export_count": doc.export_count,
+        "expires_at": iso(expires_at(doc)),
         "files": [{"id": f.id, "filename": f.filename, "size": f.size} for f in doc.files],
     }
 
@@ -504,7 +539,7 @@ def preview_payload(db: Session, doc: Document) -> dict[str, Any]:
         files = [InputFile(f.filename, storage.get(f)) for f in doc.files]
         pg = preview.pages(files, ex.get("geometry") or [])
     except (storage.StorageError, extract.PdfError) as e:
-        raise DocumentError(500, f"原始 PDF 无法读取：{e}") from e
+        raise DocumentError(500, "pdf_unreadable", f"The original PDF cannot be read: {e}", {"error": str(e)}) from e
     src_lines, items, converted = pg["lines"], ex.get("items") or [], ex.get("converted") or []
     nowhere = {"page": None, "bbox": None, "cells": {}, "joined": 0}
 

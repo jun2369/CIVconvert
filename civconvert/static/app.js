@@ -1,6 +1,8 @@
-/* Shared by every page: API calls (session cookie + CSRF header), the top bar, dialogs, toasts. */
+/* Shared by every page: API calls (session cookie + CSRF header), the top bar, dialogs, toasts.
+   Texts come from i18n.js (load it first). */
 (() => {
   "use strict";
+  const { t } = window.CIVi18n;
 
   const el = (tag, attrs = {}, ...children) => {
     const node = document.createElement(tag);
@@ -35,17 +37,17 @@
     try {
       res = await fetch(path, { method, headers, body, credentials: "same-origin", keepalive });
     } catch {
-      const err = new ApiError("连接不到服务器（网络中断或服务没有运行）", 0);
+      const err = new ApiError(t("common.offline"), 0);
       err.offline = true;
       throw err;
     }
     if (res.status === 401 && !quiet401) {
       toLogin();
-      throw new ApiError("请先登录", 401);
+      throw new ApiError(t("common.login_required"), 401);
     }
     if (raw && res.ok) return res;
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError(data.error || data.detail || `HTTP ${res.status}`, res.status, data);
+    if (!res.ok) throw new ApiError(CIVi18n.error(data, `HTTP ${res.status}`), res.status, data);
     return data;
   }
 
@@ -56,21 +58,21 @@
     const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
     if (!withDate) return `${time}:${pad(d.getSeconds())}`;
     const today = new Date();
-    if (d.toDateString() === today.toDateString()) return `今天 ${time}`;
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+    if (d.toDateString() === today.toDateString()) return t("common.today", { time });
+    return `${fmtDate(iso)} ${time}`;
+  }
+  function fmtDate(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
   const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
   const startOfToday = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
 
-  const STATUS = {
-    processing: "处理中",
-    editing: "编辑中",
-    confirmed: "已确认",
-    failed: "失败 / 需处理",
-  };
+  const statusLabel = (status) => (CIVi18n.has("status." + status) ? t("status." + status) : status);
   function statusBadges(doc) {
-    const out = [el("span", { class: `badge st-${doc.status}` }, doc.status === "processing" ? el("span", { class: "spin" }) : null, STATUS[doc.status] || doc.status)];
-    if (doc.status === "editing" && doc.needs_review) out.push(el("span", { class: "badge st-review", title: "有校验问题，请检查" }, "需复核"));
+    const out = [el("span", { class: `badge st-${doc.status}` }, doc.status === "processing" ? el("span", { class: "spin" }) : null, statusLabel(doc.status))];
+    if (doc.status === "editing" && doc.needs_review) out.push(el("span", { class: "badge st-review", title: t("status.review_tip") }, t("status.review")));
     return out;
   }
 
@@ -83,7 +85,7 @@
   }
 
   /** A modal question; resolves true (OK) / false. body: string or nodes. */
-  function ask({ title, body, ok = "确定", cancel = "取消", okClass = "primary", danger = false }) {
+  function ask({ title, body, ok = t("common.ok"), cancel = t("common.cancel"), okClass = "primary", danger = false }) {
     return new Promise((resolve) => {
       const dlg = el("dialog", { class: "dlg", "aria-label": title });
       const okBtn = el("button", { type: "button", class: `btn ${danger ? "danger" : okClass}`, text: ok });
@@ -129,13 +131,13 @@
   async function topbar(user) {
     const bar = $(".topbar");
     const initials = (user.name || user.email).split(/\s+/).map((p) => p[0]).join("").slice(0, 2).toUpperCase();
-    const logout = el("button", { type: "button", class: "btn small", text: "退出登录" });
+    const logout = el("button", { type: "button", class: "btn small", text: t("common.logout") });
     logout.onclick = async () => {
       logout.disabled = true;
       await api("/api/auth/logout", { method: "POST" }).catch(() => {});
       location.href = "/login";
     };
-    bar.append(el("div", { class: "userbox" },
+    bar.append(CIVi18n.controls(), el("div", { class: "userbox" },
       el("span", { class: "avatar", text: initials, "aria-hidden": "true" }),
       el("span", { class: "who" }, el("b", { text: user.name }), " ", user.email),
       logout));
@@ -167,5 +169,5 @@
     if (first) first.focus();
   }
 
-  window.CIV = { el, $, api, ApiError, toLogin, fmtTime, fmtSize, startOfToday, STATUS, statusBadges, toast, ask, saveBlob, download, topbar, currentUser, menu };
+  window.CIV = { el, $, api, ApiError, toLogin, fmtTime, fmtDate, fmtSize, startOfToday, statusLabel, statusBadges, toast, ask, saveBlob, download, topbar, currentUser, menu };
 })();

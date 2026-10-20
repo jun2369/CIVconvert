@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>文档 · CIVconvert</title>
+<title>Document · CIVconvert</title>
+<script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/editor.css">
 <link rel="stylesheet" href="/static/preview.css">
@@ -11,7 +12,7 @@
 <body class="editor">
 <header class="topbar"><a class="brand" href="/">CIVconvert <small>Commercial Invoice → CargoWise</small></a><span class="grow"></span></header>
 <div class="docbar">
-  <a class="back" href="/">← 工作面板</a>
+  <a class="back" href="/" data-i18n="ed.back">← Dashboard</a>
   <h1 id="title">…</h1>
   <span id="badges"></span>
   <span class="meta" id="meta"></span>
@@ -19,33 +20,34 @@
   <span class="savestate" id="savestate" role="status" aria-live="polite"></span>
 </div>
 <div class="toolbar" id="toolbar" hidden>
-  <button type="button" class="btn small" id="undo" title="撤销 (Ctrl+Z)">↶ <span class="lbl">撤销</span></button>
-  <button type="button" class="btn small" id="redo" title="重做 (Ctrl+Y)">↷ <span class="lbl">重做</span></button>
+  <button type="button" class="btn small" id="undo" data-i18n-title="tb.undo_tip">↶ <span class="lbl" data-i18n="tb.undo">Undo</span></button>
+  <button type="button" class="btn small" id="redo" data-i18n-title="tb.redo_tip">↷ <span class="lbl" data-i18n="tb.redo">Redo</span></button>
   <span class="sep"></span>
-  <button type="button" class="btn small" id="insert" title="插入行">＋ <span class="lbl">插入行</span></button>
-  <button type="button" class="btn small danger" id="delrows" title="删除所选单元格所在的整行">－ <span class="lbl">删除行</span></button>
-  <button type="button" class="btn small" id="clear" title="清空所选单元格 (Delete)">⌫ <span class="lbl">清除</span></button>
+  <button type="button" class="btn small" id="insert" data-i18n-title="tb.insert">＋ <span class="lbl" data-i18n="tb.insert">Insert rows</span></button>
+  <button type="button" class="btn small danger" id="delrows" data-i18n-title="tb.delete_tip">－ <span class="lbl" data-i18n="tb.delete">Delete rows</span></button>
+  <button type="button" class="btn small" id="clear" data-i18n-title="tb.clear_tip">⌫ <span class="lbl" data-i18n="tb.clear">Clear</span></button>
   <span class="sep"></span>
   <span class="issues" id="issues"></span>
   <span class="sep"></span>
-  <button type="button" class="btn small" id="preview" title="对照原始 Invoice">Preview <span class="lbl">对比</span></button>
-  <button type="button" class="btn small" id="pdf" title="打开原始 PDF">PDF</button>
-  <button type="button" class="btn small" id="history" title="操作记录和版本">历史</button>
+  <button type="button" class="btn small" id="preview" data-i18n-title="tb.preview_tip" data-i18n="tb.preview">Preview</button>
+  <button type="button" class="btn small" id="pdf" data-i18n-title="tb.pdf_tip">PDF</button>
+  <button type="button" class="btn small" id="history" data-i18n-title="tb.history_tip" data-i18n="tb.history">History</button>
   <span class="grow"></span>
-  <button type="button" class="btn small" id="save" title="保存 (Ctrl+S)">Save</button>
-  <button type="button" class="btn small" id="xlsx" title="导出 Excel">Excel</button>
-  <button type="button" class="btn small primary" id="csv" title="导出当前数据为 CargoWise CSV">导出 CSV</button>
-  <button type="button" class="btn small ok" id="confirm" title="标记为已确认 / Ready">Confirm</button>
-  <button type="button" class="btn small" id="reopen" hidden title="重新编辑已确认的文档">重新编辑</button>
+  <button type="button" class="btn small" id="save" data-i18n-title="tb.save_tip">Save</button>
+  <button type="button" class="btn small" id="xlsx" data-i18n-title="tb.excel_tip">Excel</button>
+  <button type="button" class="btn small primary" id="csv" data-i18n-title="tb.csv_tip" data-i18n="tb.csv">Export CSV</button>
+  <button type="button" class="btn small ok" id="confirm" data-i18n-title="tb.confirm_tip" data-i18n="tb.confirm">Confirm</button>
+  <button type="button" class="btn small" id="reopen" hidden data-i18n-title="tb.reopen_tip" data-i18n="tb.reopen">Reopen</button>
 </div>
 <div id="banners"></div>
 <div class="fbar" id="fbar" hidden>
   <span class="addr" id="addr"></span><span class="fx">fx</span>
-  <input type="text" id="formula" aria-label="单元格内容 / 公式" spellcheck="false" autocomplete="off">
+  <input type="text" id="formula" data-i18n-aria="fx.aria" spellcheck="false" autocomplete="off">
 </div>
 <div class="gridwrap" id="gridwrap" hidden><div class="sh" id="grid"></div></div>
 <div class="statusbar" id="statusbar" hidden></div>
-<div class="center" id="center"><span><span class="spin"></span> 正在打开文档…</span></div>
+<div class="center" id="center"><span><span class="spin"></span> <span data-i18n="ed.opening">Opening the document…</span></span></div>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/formula.js"></script>
 <script src="/static/sheet.js"></script>

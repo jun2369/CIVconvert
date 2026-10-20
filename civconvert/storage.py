@@ -35,6 +35,12 @@ def put(row: DocumentFile, data: bytes) -> None:
         raise StorageError(f"unknown FILE_STORAGE '{kind}' – use 'db' or 'local'")
 
 
+def delete(row: DocumentFile) -> None:
+    """Remove the bytes kept outside the database (rows in the database go with their document)."""
+    if row.storage == "local" and row.storage_key:
+        (local_file_dir() / row.storage_key).unlink(missing_ok=True)
+
+
 def get(row: DocumentFile) -> bytes:
     if row.storage == "db":
         data = row.data or b""

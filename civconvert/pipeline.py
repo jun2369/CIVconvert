@@ -37,7 +37,9 @@ class InputFile:
 class Check:
     name: str
     ok: bool
-    detail: str
+    detail: str  # English; the web page translates `code` with `params`
+    code: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -46,9 +48,11 @@ class Flag:
 
     line: int
     level: str  # error | warning
-    message: str
+    message: str  # English; the web page translates `code` with `params`
     fields: list[str] = field(default_factory=list)  # PDF table fields (model, hs_code …)
     columns: list[str] = field(default_factory=list)  # template column letters (D, F …)
+    code: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -224,7 +228,7 @@ def _run_checks(
     joined: list[int],
 ) -> tuple[list[Check], list[str], list[Flag]]:
     cfg = profile.checks
-    checks = [Check("Line items", True, f"{len(items)} lines read")]
+    checks = [Check("Line items", True, f"{len(items)} lines read", "lines_read", {"n": len(items)})]
     warnings: list[str] = []
     flags: list[Flag] = []
     letters: dict[str, list[str]] = {}  # field -> template columns filled from it
@@ -232,29 +236,34 @@ def _run_checks(
         if c.spec.field:
             letters.setdefault(c.spec.field, []).append(c.letter)
 
-    def flag(n: int, level: str, message: str, fields: list[str], cols: list[str] | None = None, warn: bool = True) -> None:
+    def flag(
+        n: int, level: str, message: str, fields: list[str], cols: list[str] | None = None, warn: bool = True,
+        code: str = "", **params: Any,
+    ) -> None:
         if cols is None:
             cols = [letter for f in fields for letter in letters.get(f, [])]
-        flags.append(Flag(n, level, message, fields, cols))
+        flags.append(Flag(n, level, message, fields, cols, code, params))
         if warn:
             warnings.append(f"Line {n}: {message}")
 
     if cfg["totals"]:
         if totals is None:
-            checks.append(Check("Subtotal", False, "subtotal row not found – cannot confirm that every line was read"))
+            checks.append(Check("Subtotal", False, "subtotal row not found – cannot confirm that every line was read", "no_subtotal"))
         for f in cfg["totals"] if totals is not None else []:
             expected = _decimal(totals.get(f))
             values = [_decimal(i.get(f)) for i in items]
             if expected is None:
-                checks.append(Check(f"Subtotal {f}", False, f"no {f} value in the subtotal row"))
+                checks.append(Check(f"Subtotal {f}", False, f"no {f} value in the subtotal row", "no_total", {"field": f}))
                 continue
             got = sum((v for v in values if v is not None), Decimal(0))
             unreadable = sum(v is None for v in values)
             ok = unreadable == 0 and abs(got - expected) <= Decimal("0.01")
             detail = f"lines {_fmt(got)} vs subtotal {_fmt(expected)}"
+            params: dict[str, Any] = {"field": f, "got": _fmt(got), "expected": _fmt(expected)}
             if unreadable:
                 detail += f" ({unreadable} line(s) without a readable {f})"
-            checks.append(Check(f"Subtotal {f}", ok, detail))
+                params["unreadable"] = unreadable
+            checks.append(Check(f"Subtotal {f}", ok, detail, "total_unreadable" if unreadable else "total", params))
 
     if cfg["line_math"]:
         q, p, a = cfg["line_math"]
@@ -263,21 +272,24 @@ def _run_checks(
             qty, price, amount = (_decimal(item.get(x)) for x in (q, p, a))
             if None in (qty, price, amount):
                 bad.append(str(n))
-                flag(n, "error", f"{q} x {p} = {a} cannot be checked: a value is missing or unreadable", [q, p, a], [], warn=False)
+                flag(n, "error", f"{q} x {p} = {a} cannot be checked: a value is missing or unreadable", [q, p, a], [], warn=False,
+                     code="line_math_unreadable", q=q, p=p, a=a)
             # allow rounding of the printed unit price: half a cent per unit
             elif abs(qty * price - amount) > max(Decimal("0.01"), abs(qty) * Decimal("0.005")):
                 bad.append(str(n))
-                flag(n, "error", f"{q} x {p} = {_fmt(qty * price)}, but {a} is {_fmt(amount)}", [q, p, a], [], warn=False)
+                flag(n, "error", f"{q} x {p} = {_fmt(qty * price)}, but {a} is {_fmt(amount)}", [q, p, a], [], warn=False,
+                     code="line_math", q=q, p=p, a=a, calc=_fmt(qty * price), amount=_fmt(amount))
         detail = f"{q} x {p} = {a} on every line" if not bad else f"does not add up on line(s) {', '.join(bad)}"
-        checks.append(Check("Line math", not bad, detail))
+        params = {"q": q, "p": p, "a": a, "lines": bad}
+        checks.append(Check("Line math", not bad, detail, "line_math_bad" if bad else "line_math_ok", params))
 
     for n, item in enumerate(items, 1):
         missing = [f for f in profile.table.required if not item.get(f)]
         if missing:
-            flag(n, "error", f"{', '.join(missing)} is empty", missing)
+            flag(n, "error", f"{', '.join(missing)} is empty", missing, code="empty", names=missing)
         for f, rx in cfg["patterns"].items():
             if item.get(f) and not rx.search(item[f]):
-                flag(n, "warning", f"{f} '{item[f]}' has an unexpected format", [f])
+                flag(n, "warning", f"{f} '{item[f]}' has an unexpected format", [f], code="format", field=f, value=item[f])
 
     for n, (row, item) in enumerate(zip(rows, items), 1):
         for col in columns:
@@ -286,11 +298,14 @@ def _run_checks(
             raw = item.get(col.spec.field, "") if col.spec.field else ""
             if any(parse_spec(t)[0] == "strip_chinese" for t in col.spec.transforms) and raw:
                 if not value:
-                    flag(n, "error", f"{col.header} is empty after removing Chinese ('{raw}') – needs an English description", fields, [col.letter])
+                    flag(n, "error", f"{col.header} is empty after removing Chinese ('{raw}') – needs an English description", fields, [col.letter],
+                         code="empty_after_strip", header=col.header, raw=raw)
                 elif value != raw and len(re.findall(r"[A-Za-z]", value)) < cfg["min_letters_after_strip"]:
-                    flag(n, "warning", f"{col.header} '{value}' looks too short after removing Chinese ('{raw}')", fields, [col.letter])
+                    flag(n, "warning", f"{col.header} '{value}' looks too short after removing Chinese ('{raw}')", fields, [col.letter],
+                         code="too_short", header=col.header, value=value, raw=raw)
             if cfg["ascii_only"] and value and not value.isascii():
-                flag(n, "warning", f"{col.header} contains non-English characters: '{value}'", fields, [col.letter])
+                flag(n, "warning", f"{col.header} contains non-English characters: '{value}'", fields, [col.letter],
+                     code="non_ascii", header=col.header, value=value)
 
     # the same model on several lines must have the same HS code (checks.consistent)
     for key, dependents in cfg["consistent"].items():
@@ -302,13 +317,17 @@ def _run_checks(
             for f in dependents:
                 for n in group:
                     mine = items[n - 1].get(f, "")
-                    other = [f"'{items[m - 1].get(f, '')}' on line {m}" for m in group if items[m - 1].get(f, "") != mine]
-                    if other:
-                        flag(n, "warning", f"{key} '{value}' has {f} '{mine}' here but {', '.join(other)}", [key, f])
+                    differ = [m for m in group if items[m - 1].get(f, "") != mine]
+                    if differ:
+                        other = ", ".join(f"'{items[m - 1].get(f, '')}' on line {m}" for m in differ)
+                        flag(n, "warning", f"{key} '{value}' has {f} '{mine}' here but {other}", [key, f],
+                             code="inconsistent", key=key, value=value, field=f, mine=mine,
+                             others=[{"line": m, "value": items[m - 1].get(f, "")} for m in differ])
 
     for n, count in enumerate(joined, 1):
         if count:  # already reported by extract as a note
-            flag(n, "warning", f"{count} wrapped row(s) below were joined to this line", profile.table.continuation_fields, warn=False)
+            flag(n, "warning", f"{count} wrapped row(s) below were joined to this line", profile.table.continuation_fields, warn=False,
+                 code="joined", count=count)
     return checks, warnings, flags
 
 

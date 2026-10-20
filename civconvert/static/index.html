@@ -1,19 +1,15 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>工作面板 · CIVconvert</title>
+<title>Dashboard · CIVconvert</title>
+<script src="/static/prefs.js"></script>
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/preview.css">
 <style>
-  .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
-  .seg button { font: inherit; font-size: 14px; padding: 7px 14px; border: 0; background: none; color: var(--text); cursor: pointer; }
-  .seg button + button { border-left: 1px solid var(--line); }
-  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
-
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .head { margin-bottom: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .stat { text-align: left; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; cursor: pointer; }
   .stat:hover { border-color: var(--accent); }
   .stat.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
@@ -55,31 +51,27 @@
 <body>
 <header class="topbar"><a class="brand" href="/">CIVconvert <small>Commercial Invoice → CargoWise</small></a><span class="grow"></span></header>
 <main class="page">
-  <div class="head">
-    <div><h1>工作面板</h1><p class="sub" id="greeting"></p></div>
-    <div class="seg" role="group" aria-label="范围">
-      <button type="button" data-scope="mine" class="on">我的文档</button><button type="button" data-scope="all">全部文档</button>
-    </div>
-  </div>
+  <div class="head"><h1 data-i18n="dash.heading">Dashboard</h1><p class="sub" id="greeting"></p></div>
 
-  <section class="stats" id="stats" aria-label="统计"></section>
+  <section class="stats" id="stats" aria-label="Counts"></section>
 
   <section class="panel">
-    <h2>上传 Commercial Invoice</h2>
+    <h2 data-i18n="upload.heading">Upload Commercial Invoice</h2>
     <div class="upload">
-      <label class="field">客户
-        <select id="customer"><option value="">自动识别（根据 PDF 内容）</option></select>
+      <label class="field"><span data-i18n="upload.customer">Customer</span>
+        <select id="customer"><option value="" data-i18n="upload.auto">Detect automatically (from the PDF)</option></select>
       </label>
       <div>
         <div class="drop" id="drop">
-          <strong>把 PDF 拖到这里</strong> 或 <button type="button" class="link" id="pick">选择文件</button>（可多选）
+          <strong data-i18n="upload.drop">Drop PDFs here</strong> <span data-i18n="upload.or">or</span>
+          <button type="button" class="link" id="pick" data-i18n="upload.pick">choose files</button> <span data-i18n="upload.multi">(several allowed)</span>
           <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
-          <div class="hint">每份发票保存为一个文档，可以随时回来继续编辑</div>
+          <div class="hint" data-i18n="upload.hint">Each invoice is saved as a document you can come back to and keep editing</div>
         </div>
         <ul class="files" id="filelist"></ul>
         <div class="uploadbar">
-          <label class="check" id="mergeRow" hidden><input type="checkbox" id="merge"> 这些 PDF 是<b>同一张发票</b>被拆开的（合并成一个文档）</label>
-          <button type="button" class="btn primary" id="go" disabled>上传并转换</button>
+          <label class="check" id="mergeRow" hidden><input type="checkbox" id="merge"> <span data-i18n="upload.merge">These PDFs are parts of one invoice</span></label>
+          <button type="button" class="btn primary" id="go" disabled data-i18n="upload.go">Upload and convert</button>
           <span class="hint" id="upStatus"></span>
         </div>
       </div>
@@ -88,29 +80,34 @@
 
   <section class="panel">
     <div class="filters">
-      <input type="search" id="q" placeholder="搜索发票号或文档名称" aria-label="搜索">
-      <select id="status" aria-label="状态">
-        <option value="">全部状态</option>
-        <option value="processing">处理中</option>
-        <option value="editing">编辑中</option>
-        <option value="review">需复核</option>
-        <option value="confirmed">已确认</option>
-        <option value="failed">失败</option>
-        <option value="attention">失败或需人工检查</option>
+      <input type="search" id="q" data-i18n-placeholder="list.search" data-i18n-aria="list.search">
+      <select id="status" data-i18n-aria="list.status">
+        <option value="" data-i18n="list.all_statuses">All statuses</option>
+        <option value="editing" data-i18n="status.editing">Editing</option>
+        <option value="confirmed" data-i18n="status.confirmed">Completed</option>
+        <option value="attention" hidden data-i18n="card.attention">Failed or needs a check</option>
       </select>
-      <span class="dates">创建日期 <input type="date" id="from" aria-label="从"> – <input type="date" id="to" aria-label="到"></span>
-      <button type="button" class="btn small" id="reset">清除筛选</button>
+      <span class="dates"><span data-i18n="list.created">Created</span>
+        <input type="date" id="from" data-i18n-aria="list.from"> – <input type="date" id="to" data-i18n-aria="list.to"></span>
+      <button type="button" class="btn small" id="reset" data-i18n="list.clear">Clear filters</button>
     </div>
     <div id="listError"></div>
     <div class="tablewrap">
       <table class="list">
-        <thead><tr><th>文档 / 发票号</th><th>Invoice Number</th><th>状态</th><th class="num">行数</th><th>客户</th><th>创建人</th><th>创建时间</th><th>最后修改</th><th>CSV 导出</th><th>操作</th></tr></thead>
+        <thead><tr>
+          <th data-i18n="th.document">Document / Invoice No.</th><th data-i18n="th.invoice">Invoice Number</th><th data-i18n="th.status">Status</th>
+          <th class="num" data-i18n="th.lines">Lines</th><th data-i18n="th.customer">Customer</th><th data-i18n="th.creator">Created by</th>
+          <th data-i18n="th.created">Created</th><th data-i18n="th.modified">Last modified</th><th data-i18n="th.csv">CSV export</th><th data-i18n="th.actions">Actions</th>
+        </tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
-    <div class="pager"><span class="hint" id="count"></span><span><button type="button" class="btn small" id="prev">上一页</button> <button type="button" class="btn small" id="next">下一页</button></span></div>
+    <div class="pager"><span class="hint" id="count"></span>
+      <span><button type="button" class="btn small" id="prev" data-i18n="list.prev">Previous</button> <button type="button" class="btn small" id="next" data-i18n="list.next">Next</button></span></div>
+    <p class="hint" id="retention"></p>
   </section>
 </main>
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/preview.js"></script>
 <script src="/static/dashboard.js"></script>

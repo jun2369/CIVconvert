@@ -13,6 +13,7 @@ Conversion API – a logged-in user, or X-API-Key = one of API_KEY (comma-separa
 Documents API: see documents_api.py.  Login: see auth.py.
 """
 
+import asyncio
 import base64
 import binascii
 import io
@@ -31,6 +32,7 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from . import __version__, auth, db, documents, documents_api, preview, settings
+from .errors import AppError
 from .pipeline import ConversionError, Failure, InputFile, Result, convert, convert_many
 from .profiles import ConfigError, load_customers
 
@@ -47,6 +49,23 @@ if not log.handlers:
 
 
 
+HOUSEKEEPING_EVERY = 6 * 3600  # seconds
+
+
+def _housekeeping_once() -> None:
+    with db.session_scope() as session:
+        documents.purge_expired(session)  # documents older than DOCUMENT_RETENTION_MONTHS
+
+
+async def _housekeeping() -> None:
+    while True:
+        try:
+            await run_in_threadpool(_housekeeping_once)
+        except Exception:
+            log.exception("housekeeping failed")
+        await asyncio.sleep(HOUSEKEEPING_EVERY)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await run_in_threadpool(db.migrate)
@@ -57,7 +76,9 @@ async def lifespan(_: FastAPI):
         log.info("API_KEY is not set: the conversion API is only open to logged-in users")
     if settings.dev_login_enabled():
         log.warning("AUTH_DEV_LOGIN is on: anyone can log in with just an e-mail address (development only)")
+    housekeeping = asyncio.create_task(_housekeeping())
     yield
+    housekeeping.cancel()
 
 
 app = FastAPI(title="CIVconvert", version=__version__, description="Commercial Invoice PDF -> CargoWise CSV", lifespan=lifespan)
@@ -85,9 +106,9 @@ async def _security_headers(request: Request, call_next):
     return response
 
 
-@app.exception_handler(documents.DocumentError)
-async def _document_error(_: Request, exc: documents.DocumentError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status, content={"status": "error", "error": exc.message, **exc.extra})
+@app.exception_handler(AppError)
+async def _app_error(_: Request, exc: AppError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status, content=exc.payload(), headers=exc.headers or None)
 
 
 @app.exception_handler(ConversionError)
@@ -178,7 +199,7 @@ def healthz() -> dict[str, str]:
 
 @app.get("/api/info")
 def info() -> dict[str, Any]:
-    return {"version": __version__, "auth_required": True, "login": auth.auth_config()}
+    return {"version": __version__, "auth_required": True, "login": auth.auth_config(), "retention_months": settings.retention_months()}
 
 
 @app.get("/api/customers", dependencies=[Depends(auth.require_api_access)])

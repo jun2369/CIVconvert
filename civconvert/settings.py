@@ -72,6 +72,11 @@ def local_file_dir() -> Path:
     return Path(env("LOCAL_FILE_DIR") or PROJECT_DIR / "data" / "files")
 
 
+def retention_months() -> int:
+    """Documents are deleted this many months after upload (0 = keep them)."""
+    return max(0, env_int("DOCUMENT_RETENTION_MONTHS", 4))
+
+
 def sync_jobs() -> bool:
     """Run conversions inside the request instead of a background thread (tests)."""
     return env_flag("CIV_SYNC_JOBS")

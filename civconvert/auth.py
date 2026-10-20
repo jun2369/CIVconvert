@@ -25,13 +25,14 @@ from datetime import timedelta
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from . import settings
 from .db import as_utc, get_db, iso, utcnow
+from .errors import AppError
 from .models import AuditLog, User, UserSession
 
 log = logging.getLogger("civconvert")
@@ -159,9 +160,9 @@ def require_user(request: Request, db: Annotated[Session, Depends(get_db)]) -> U
     """FastAPI dependency: the logged-in user (401 if none). Writes need the X-CIV-Request header."""
     user = session_user(request, db)
     if user is None:
-        raise HTTPException(status_code=401, detail="请先登录")
+        raise AppError(401, "login_required", "Please log in")
     if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get(CSRF_HEADER) != "1":
-        raise HTTPException(status_code=403, detail=f"missing {CSRF_HEADER} header")
+        raise AppError(403, "csrf_missing", f"missing {CSRF_HEADER} header")
     return user
 
 
@@ -212,26 +213,27 @@ def auth_config() -> dict[str, bool]:
 def login(body: LoginIn, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     email = body.email.strip().lower()
     if not _EMAIL.fullmatch(email) or not body.password:
-        raise HTTPException(status_code=400, detail="请输入邮箱和密码")
+        raise AppError(400, "email_password_required", "Enter your e-mail address and password")
     ip = client_ip(request)
     wait = max(failures_by_email.wait(email), failures_by_ip.wait(ip))
     if wait > 0:
-        raise HTTPException(status_code=429, detail=f"登录失败次数过多，请 {int(wait // 60) + 1} 分钟后再试",
-                            headers={"Retry-After": str(int(wait) + 1)})
+        minutes = int(wait // 60) + 1
+        raise AppError(429, "too_many_attempts", f"Too many failed logins – try again in {minutes} minute(s)", {"minutes": minutes},
+                       headers={"Retry-After": str(int(wait) + 1)})
     try:
         account = nimbus_sign_in(email, body.password)
     except NimbusUnavailable as e:
         log.warning("Nimbus login unavailable: %s", e)
-        raise HTTPException(status_code=502, detail="暂时连接不到 Nimbus 账户系统，请稍后再试") from e
+        raise AppError(502, "nimbus_unavailable", "The Nimbus account system cannot be reached – try again later") from e
     if account is None:
         failures_by_email.fail(email)
         failures_by_ip.fail(ip)
         log.info("failed login for %s from %s", email, ip)
-        raise HTTPException(status_code=401, detail="邮箱或密码不正确")
+        raise AppError(401, "wrong_credentials", "Wrong e-mail address or password")
     failures_by_email.reset(email)
     user = _upsert_user(db, email, account.get("name"), account)
     if not user.is_active:
-        raise HTTPException(status_code=403, detail="该账户已被停用")
+        raise AppError(403, "account_disabled", "This account is disabled")
     start_session(db, user, request, response)
     db.add(AuditLog(user_id=user.id, action="user.login", detail={"ip": ip, "via": "nimbus"}, created_at=utcnow()))
     db.commit()
@@ -242,10 +244,10 @@ def login(body: LoginIn, request: Request, response: Response, db: Annotated[Ses
 def dev_login(body: DevLoginIn, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     """Local development only (AUTH_DEV_LOGIN=1): log in with an e-mail address, no password."""
     if not settings.dev_login_enabled():
-        raise HTTPException(status_code=404, detail="Not Found")
+        raise AppError(404, "not_found", "Not Found")
     email = body.email.strip().lower()
     if not _EMAIL.fullmatch(email):
-        raise HTTPException(status_code=400, detail="请输入邮箱")
+        raise AppError(400, "email_required", "Enter an e-mail address")
     user = _upsert_user(db, email, (body.name or "").strip() or None, None)
     start_session(db, user, request, response)
     db.add(AuditLog(user_id=user.id, action="user.login", detail={"ip": client_ip(request), "via": "dev"}, created_at=utcnow()))
@@ -288,9 +290,9 @@ def require_api_access(
     if x_api_key:
         if keys and any(hmac.compare_digest(x_api_key.encode(), k.encode()) for k in keys):
             return
-        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
+        raise AppError(401, "bad_api_key", "Missing or invalid X-API-Key header")
     if session_user(request, db) is not None:
         if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get(CSRF_HEADER) != "1":
-            raise HTTPException(status_code=403, detail=f"missing {CSRF_HEADER} header")
+            raise AppError(403, "csrf_missing", f"missing {CSRF_HEADER} header")
         return
-    raise HTTPException(status_code=401, detail="Log in, or send a valid X-API-Key header")
+    raise AppError(401, "login_required", "Log in, or send a valid X-API-Key header")

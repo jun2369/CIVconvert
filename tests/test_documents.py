@@ -81,7 +81,7 @@ def test_edit_save_export_confirm(user_client):
 
     res = user_client.post(f"/api/documents/{doc['id']}/confirm", json={"revision": 2})
     assert res.json()["document"]["status"] == "confirmed"
-    assert save(user_client, doc["id"], 2, rows, status=409)["error"].startswith("文档已确认")
+    assert save(user_client, doc["id"], 2, rows, status=409)["code"] == "completed_readonly"
     assert user_client.post(f"/api/documents/{doc['id']}/export").status_code == 200  # final export
     assert user_client.post(f"/api/documents/{doc['id']}/reopen").json()["document"]["status"] == "editing"
 
@@ -135,7 +135,7 @@ def test_original_pdf_is_kept(user_client):
     assert res.content == data and res.headers["content-type"] == "application/pdf"
 
 
-def test_list_filters_and_dashboard(app_client):
+def test_everyone_only_sees_their_own_documents(app_client):
     login(app_client, "op.one@agslogistics.com")
     a = upload(app_client, "problem invoice.pdf", problem_invoice())
     upload(app_client, "unknown seller.pdf", problem_invoice(seller="SOMEONE ELSE LTD"))
@@ -143,20 +143,76 @@ def test_list_filters_and_dashboard(app_client):
     login(app_client, "op.two@agslogistics.com")
     upload(app_client, "second.pdf", problem_invoice())
 
-    def ids(**params):
+    def names(**params):
         return [d["name"] for d in app_client.get("/api/documents", params=params).json()["items"]]
 
-    assert ids() == ["second"]  # mine
-    assert sorted(ids(mine=False)) == ["problem invoice", "second", "unknown seller"]
-    assert ids(mine=False, status="confirmed") == ["problem invoice"]
-    assert sorted(ids(mine=False, status="attention")) == ["second", "unknown seller"]  # failed + needs review
-    assert ids(mine=False, q="T-0001") == ["second", "problem invoice"]  # invoice number
-    assert ids(mine=False, q="SELLER") == ["unknown seller"]
-    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    assert ids(mine=False, created_from=tomorrow) == []
+    assert names() == ["second"]
+    assert names(mine=False) == ["second"]  # there is no "all documents"
+    stats = app_client.get("/api/documents/stats").json()
+    assert (stats["total"], stats["editing"], stats["confirmed"]) == (1, 1, 0)
+    # op.one's document cannot be opened, changed, exported or previewed by op.two
+    for method, path in [("get", ""), ("get", "/preview"), ("get", "/log"), ("post", "/export"), ("post", "/reopen"),
+                         ("get", f"/files/{a['files'][0]['id']}")]:
+        res = getattr(app_client, method)(f"/api/documents/{a['id']}{path}")
+        assert res.status_code == 404 and res.json()["code"] == "not_found", (path, res.text)
+    res = app_client.put(f"/api/documents/{a['id']}/sheet", json={"revision": 1, "rows": []})
+    assert res.status_code == 404
 
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    mine = app_client.get("/api/documents/stats", params={"since": today}).json()
-    assert (mine["today"], mine["total"], mine["editing"], mine["attention"]) == (1, 1, 1, 1)
-    everyone = app_client.get("/api/documents/stats", params={"since": today, "mine": False}).json()
-    assert (everyone["total"], everyone["confirmed"], everyone["failed"], everyone["attention"]) == (3, 1, 1, 2)
+    login(app_client, "op.one@agslogistics.com")
+    assert sorted(names()) == ["problem invoice", "unknown seller"]
+    assert names(status="confirmed") == ["problem invoice"]
+    assert names(status="editing") == []
+    assert names(status="attention") == ["unknown seller"]  # failed
+    assert names(q="SELLER") == ["unknown seller"]
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    assert names(created_from=tomorrow) == []
+
+
+def test_documents_are_deleted_four_months_after_upload(user_client):
+    from sqlalchemy import func, select
+
+    from civconvert import documents
+    from civconvert.models import AuditLog, Document, DocumentFile, DocumentSheet, SheetVersion
+
+    old = upload(user_client, "old.pdf", problem_invoice())
+    recent = upload(user_client, "recent.pdf", problem_invoice())
+    now = datetime.now(timezone.utc)
+    with db.session_scope() as s:
+        s.get(Document, old["id"]).created_at = documents.months_before(now, 4) - timedelta(days=1)
+        s.get(Document, recent["id"]).created_at = documents.months_before(now, 4) + timedelta(days=1)
+    expires = datetime.fromisoformat(detail(user_client, recent["id"])["document"]["expires_at"].replace("Z", "+00:00"))
+    assert abs((expires - now).days) <= 2  # the recent one is about to expire
+
+    with db.session_scope() as s:
+        assert documents.purge_expired(s) == 1
+    with db.session_scope() as s:
+        assert s.get(Document, old["id"]) is None and s.get(Document, recent["id"]) is not None
+        for model in (DocumentFile, DocumentSheet, SheetVersion):  # everything of the old document is gone
+            assert s.scalar(select(func.count()).select_from(model).where(model.document_id == old["id"])) == 0
+        assert s.scalar(select(func.count()).select_from(AuditLog).where(AuditLog.action == "documents.purged")) == 1
+    assert user_client.get(f"/api/documents/{old['id']}").status_code == 404
+
+
+def test_months_before():
+    from civconvert.documents import months_before
+
+    assert months_before(datetime(2026, 10, 20, tzinfo=timezone.utc), 4) == datetime(2026, 6, 20, tzinfo=timezone.utc)
+    assert months_before(datetime(2027, 1, 31, tzinfo=timezone.utc), 4) == datetime(2026, 9, 30, tzinfo=timezone.utc)
+    assert months_before(datetime(2026, 10, 31, tzinfo=timezone.utc), -4) == datetime(2027, 2, 28, tzinfo=timezone.utc)
+
+
+def test_flags_and_errors_carry_codes_for_translation(user_client):
+    doc = upload(user_client, "problem invoice.pdf", problem_invoice())
+    flags = detail(user_client, doc["id"])["sheet"]["flags"]
+    codes = {(f["line"], f["code"]) for f in flags}
+    assert (12, "required_empty") in codes and (5, "bad_format") in codes and (3, "inconsistent_cells") in codes
+    [math] = [f for f in flags if f["code"] == "pdf_line"]
+    assert math["line"] == 9 and math["params"]["inner"]["code"] == "line_math"
+    assert math["params"]["inner"]["params"] == {"q": "qty", "p": "unit_price", "a": "amount", "calc": "18", "amount": "23"}
+    assert all(f["message"] and f["message"].isascii() for f in flags)  # English text for anyone without a translation
+    checks = {c["name"]: c for c in detail(user_client, doc["id"])["extraction"]["checks"]}
+    assert checks["Line items"]["code"] == "lines_read" and checks["Line items"]["params"] == {"n": 26}
+    assert checks["Line math"]["code"] == "line_math_bad" and checks["Line math"]["params"]["lines"] == ["9"]
+    assert all(c["code"] and c["detail"].isascii() for c in checks.values())
+    res = user_client.post("/api/documents", files={"files": ("x.pdf", b"hello", "application/pdf")})
+    assert res.status_code == 422 and res.json()["code"] == "not_pdf" and res.json()["params"] == {"name": "x.pdf"}

@@ -6,8 +6,16 @@
   --info: #1d58d6; --info-bg: #e7eefe;
   color-scheme: light;
 }
+/* night mode: chosen with the ☾ button (data-theme), otherwise the system setting */
+:root[data-theme="dark"] {
+  --bg: #11141a; --panel: #191d24; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c; --field: #12161c;
+  --accent: #78a0ff; --accent-text: #0c1322; --accent-soft: #1c2944;
+  --ok: #63d29c; --ok-bg: #12301f; --warn: #f1b45a; --warn-bg: #33270e; --err: #ff8c82; --err-bg: #3a1916;
+  --info: #78a0ff; --info-bg: #1c2944;
+  color-scheme: dark;
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #11141a; --panel: #191d24; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c; --field: #12161c;
     --accent: #78a0ff; --accent-text: #0c1322; --accent-soft: #1c2944;
     --ok: #63d29c; --ok-bg: #12301f; --warn: #f1b45a; --warn-bg: #33270e; --err: #ff8c82; --err-bg: #3a1916;
@@ -29,6 +37,9 @@ a { color: var(--accent); }
 .userbox { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); white-space: nowrap; }
 .userbox b { color: var(--text); font-weight: 600; }
 .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); font-weight: 700; font-size: 13px; }
+.prefs { display: inline-flex; align-items: center; gap: 6px; }
+.prefs .btn.small { min-width: 34px; }
+.prefs .theme { font-size: 15px; line-height: 1; padding: 4px 8px; }
 
 main.page { max-width: 1320px; margin: 0 auto; padding: 22px 16px 64px; }
 h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }

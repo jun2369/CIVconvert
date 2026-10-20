@@ -7,6 +7,8 @@
 (() => {
   "use strict";
   const F = window.CIVFormula;
+  const tr = (key, params) => (window.CIVi18n ? window.CIVi18n.t(key, params) : key); // texts: i18n.js
+  const flagText = (f) => (window.CIVi18n ? window.CIVi18n.flag(f) : f.message);
   const ROW_H = 24, LETTER_H = 22, HEADER_H = 30, HEAD_H = LETTER_H + HEADER_H, RH_W = 56;
   const OVERSCAN = 8, MAX_UNDO = 300, BOTTOM_SPACE = 120;
 
@@ -89,7 +91,7 @@
       this.input.className = "sh-input";
       this.input.setAttribute("spellcheck", "false");
       this.input.setAttribute("autocomplete", "off");
-      this.input.setAttribute("aria-label", "单元格内容");
+      this.input.setAttribute("aria-label", tr("sheet.cell_aria"));
       this.cellLayer.append(this.cellsBox, this.selBox, this.input);
       body.append(this.rowHead, this.cellLayer);
       this.content.append(head, body);
@@ -100,11 +102,11 @@
       this.colHead.innerHTML = this.columns.map((c, i) => {
         const role = this.roles[c.letter];
         const target = role && role.field ? " target" : "";
-        const tip = role && role.field ? ` · 来自 PDF：${role.field}` : role && role.line_no ? " · 自动编号" : "";
+        const tip = role && role.field ? tr("sheet.from_pdf", { field: role.field }) : role && role.line_no ? tr("sheet.auto_no") : "";
         return `<div class="sh-l${target}" data-c="${i}" style="left:${c.x}px;width:${c.width}px">${c.letter}</div>` +
           `<div class="sh-h${target}" data-c="${i}" style="left:${c.x}px;width:${c.width}px" title="${esc(`${c.letter}: ${c.header}${tip}`)}">${esc(c.header)}</div>`;
       }).join("");
-      this.corner.title = "全选 (Ctrl+A)";
+      this.corner.title = tr("sheet.select_all");
       this.events();
       new ResizeObserver(() => this.render()).observe(this.view);
     }
@@ -167,7 +169,7 @@
         const add = (key, map) => {
           const e = map.get(key) || { level: null, msgs: [] };
           e.level = e.level === "error" || f.level === "error" ? "error" : "warning";
-          e.msgs.push(f.message);
+          e.msgs.push(flagText(f));
           map.set(key, e);
         };
         if (f.columns && f.columns.length) for (const L of f.columns) { if (letters.has(L)) add(`${r},${letters.get(L)}`, this.cellFlags); }
@@ -308,7 +310,7 @@
           for (let c = g.c1; c <= g.c2; c++) if (this.rows[r].cells[c]) changes.push({ r, c, after: null });
         }
       }
-      if (changes.length) this.setCells(changes, `清除 ${changes.length} 个单元格`);
+      if (changes.length) this.setCells(changes, `Clear ${changes.length} cells`);
     }
 
     selectedRows() {
@@ -335,7 +337,7 @@
       }
       cells.push(...this.renumber(this.rows, rest));
       const first = idx[0];
-      this.apply({ label: `删除 ${idx.length} 行`, del, cells });
+      this.apply({ label: `Delete ${idx.length} rows`, del, cells });
       const r = Math.min(first, this.rows.length - 1);
       this.selectCell(Math.max(r, 0), this.active.c);
     }
@@ -355,7 +357,7 @@
       }
       const after = [...this.rows.slice(0, at), ...fresh, ...this.rows.slice(at)];
       cells.push(...this.renumber(this.rows, after));
-      this.apply({ label: `插入 ${count} 行`, ins, cells });
+      this.apply({ label: `Insert ${count} rows`, ins, cells });
       this.selectCell(at, this.active.c);
     }
 
@@ -384,7 +386,7 @@
       if (cut && !this.readOnly) {
         const changes = [];
         for (let r = g.r1; r <= r2; r++) for (let c = g.c1; c <= g.c2; c++) if (this.rows[r].cells[c]) changes.push({ r, c, after: null });
-        if (changes.length) this.setCells(changes, "剪切");
+        if (changes.length) this.setCells(changes, "Cut");
       }
       this.renderSelection();
     }
@@ -421,7 +423,7 @@
           if (c < this.width) changes.push({ r: target.r1 + i, c, after: cell });
         }));
       }
-      this.setCells(changes, `粘贴 ${changes.length} 个单元格`);
+      this.setCells(changes, `Paste ${changes.length} cells`);
       if (!fill) this.selectRange(target.r1, target.c1, Math.min(target.r1 + h - 1, this.rows.length - 1), Math.min(target.c1 + w - 1, this.width - 1));
     }
 
@@ -449,7 +451,7 @@
       this.editing = null;
       this.input.classList.remove("editing");
       this.input.value = "";
-      this.setCells([{ r, c, after: content(text) }], `编辑 ${this.address(r, c)}`);
+      this.setCells([{ r, c, after: content(text) }], `Edit ${this.address(r, c)}`);
       if (move) this.moveBy(move[0], move[1], false);
       else { this.renderSelection(); this.emitSelect(); }
     }
@@ -469,7 +471,7 @@
       if (this.readOnly || !this.rows.length) return;
       this.cancelEdit();
       const { r, c } = this.active;
-      this.setCells([{ r, c, after: content(text) }], `编辑 ${this.address(r, c)}`);
+      this.setCells([{ r, c, after: content(text) }], `Edit ${this.address(r, c)}`);
     }
 
     placeEditor() {
@@ -755,7 +757,7 @@
       const h = this.rows.length * ROW_H;
       this.rowHead.style.height = this.cellLayer.style.height = h + BOTTOM_SPACE + "px";
       this.empty.hidden = this.rows.length > 0;
-      this.empty.textContent = this.rows.length ? "" : "没有数据行。可以从 Excel 复制后粘贴（Ctrl+V），或点工具栏的“插入行”。";
+      this.empty.textContent = this.rows.length ? "" : tr("sheet.empty");
     }
 
     schedule() {
@@ -810,7 +812,7 @@
           if (flag) { cls += " " + flag.level; tip = flag.msgs.join("\n") + (tip ? "\n" + tip : ""); }
           if (original && row.src && role && role.field) {
             const was = original(row.src, col.letter);
-            if (was !== undefined && was !== null && was !== text) { cls += " edited"; tip = (tip ? tip + "\n" : "") + `转换结果原为：${was === "" ? "（空）" : was}`; }
+            if (was !== undefined && was !== null && was !== text) { cls += " edited"; tip = (tip ? tip + "\n" : "") + tr("sheet.was", { v: was === "" ? tr("common.empty") : was }); }
           }
           html += `<div class="${cls}" style="left:${col.x}px;top:${top}px;width:${col.width}px"${tip ? ` data-tip="${esc(tip)}"` : ""}>${esc(text)}</div>`;
         }

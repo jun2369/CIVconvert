@@ -9,6 +9,11 @@
   const STEP = 1.25;
   const STACK_BELOW = 900; // drawer narrower than this: the panes go on top of each other
   const WIDTH_KEY = "civconvert.preview.width";
+  const I = window.CIVi18n;
+  const L = (key, params) => (I ? I.t(key, params) : key);
+  const flagText = (f) => (I ? I.flag(f) : f.message);
+  const checkName = (c) => (I ? I.checkName(c.name) : c.name);
+  const checkDetail = (c) => (I ? I.checkDetail(c) : c.detail);
 
   const el = (tag, attrs = {}, ...children) => {
     const node = document.createElement(tag);
@@ -90,25 +95,26 @@
   function mount() {
     S.backdrop = el("div", { class: "pv-backdrop" });
     S.backdrop.onclick = close;
-    S.root = el("div", { class: "pv", role: "dialog", "aria-modal": "true", "aria-label": "校验与对比预览", tabindex: "-1" });
+    S.root = el("div", { class: "pv", role: "dialog", "aria-modal": "true", "aria-label": L("pv.aria"), tabindex: "-1" });
+    S.root.style.setProperty("--pv-empty-label", JSON.stringify(L("pv.empty_tag"))); // the tag on empty cells (preview.css)
     const width = parseInt(store.get(WIDTH_KEY), 10);
     if (width > 0) S.root.style.setProperty("--pv-width", width + "px");
 
     S.title = el("h2", { text: S.opts.title || "Preview" });
-    S.meta = el("div", { class: "pv-meta", text: "正在生成预览…" });
+    S.meta = el("div", { class: "pv-meta", text: L("pv.loading_meta") });
     S.issueBox = el("div", { class: "pv-issues" });
     const sync = el("input", { type: "checkbox", checked: "" });
     sync.onchange = () => { S.sync = sync.checked; if (S.sync && S.driver) onScroll(S.driver); };
     S.layoutBtn = btn("stack", null, "", () => { S.layout = S.root.dataset.layout === "stack" ? "side" : "stack"; layout(); });
-    S.fullBtn = btn("full", null, "全屏 (F)", toggleFull);
+    S.fullBtn = btn("full", null, L("pv.fullscreen"), toggleFull);
     const tools = el("div", { class: "pv-tools" }, S.issueBox,
-      el("label", { class: "pv-check", title: "滚动一侧时，另一侧自动对齐到同一行" }, sync, "同步滚动"),
-      S.layoutBtn, S.fullBtn, btn("close", null, "关闭 (Esc)", close));
+      el("label", { class: "pv-check", title: L("pv.sync_tip") }, sync, L("pv.sync")),
+      S.layoutBtn, S.fullBtn, btn("close", null, L("pv.close"), close));
     S.checks = el("div", { class: "pv-checks", hidden: "" });
-    S.body = el("div", { class: "pv-body" }, el("div", { class: "pv-msg" }, el("span", { class: "pv-spin" }), "正在读取 PDF、生成预览…"));
+    S.body = el("div", { class: "pv-body" }, el("div", { class: "pv-msg" }, el("span", { class: "pv-spin" }), L("pv.loading")));
     S.detail = el("div", { class: "pv-detail" });
     S.actions = el("div", { class: "pv-actions" });
-    const resize = el("div", { class: "pv-resize", title: "拖动调整宽度" });
+    const resize = el("div", { class: "pv-resize", title: L("pv.resize") });
     S.root.append(resize,
       el("header", { class: "pv-head" }, el("div", { class: "pv-title" }, S.title, S.meta), tools),
       S.checks, S.body, el("footer", { class: "pv-foot" }, S.detail, S.actions));
@@ -127,8 +133,8 @@
   }
 
   function fail(message) {
-    S.meta.textContent = "无法生成预览";
-    S.body.replaceChildren(el("div", { class: "pv-msg err", text: "预览失败：" + message }));
+    S.meta.textContent = L("pv.failed_meta");
+    S.body.replaceChildren(el("div", { class: "pv-msg err", text: L("pv.failed", { error: message }) }));
   }
 
   function layout() {
@@ -137,7 +143,8 @@
     S.root.dataset.layout = mode;
     const next = mode === "stack" ? "side" : "stack";
     S.layoutBtn.replaceChildren(icon(next));
-    S.layoutBtn.title = mode === "stack" ? "改为左右并排" : "改为上下排列";
+    S.layoutBtn.title = L(mode === "stack" ? "pv.side_by_side" : "pv.stacked");
+    S.layoutBtn.setAttribute("aria-label", S.layoutBtn.title);
   }
 
   function resizable(handle) {
@@ -172,7 +179,8 @@
     if (!S) return;
     const on = document.fullscreenElement === S.root || S.root.classList.contains("max");
     S.fullBtn.replaceChildren(icon(on ? "unfull" : "full"));
-    S.fullBtn.title = on ? "退出全屏 (F)" : "全屏 (F)";
+    S.fullBtn.title = L(on ? "pv.exit_fullscreen" : "pv.fullscreen");
+    S.fullBtn.setAttribute("aria-label", S.fullBtn.title);
     S.fullBtn.classList.toggle("on", on);
   }
 
@@ -189,12 +197,12 @@
     S.page = first < 0 ? 0 : first;
 
     const r = S.result;
-    S.title.replaceChildren(r.filename + "  ", el("span", { class: "badge " + (r.status === "ok" ? "ok" : "review"), text: r.status === "ok" ? "✓ 校验通过" : "需复核" }));
-    S.meta.textContent = [r.customer.name, r.document.invoice_no && "发票号 " + r.document.invoice_no, r.document.invoice_date,
-      `${S.n} 行`, r.sources.join(" + ")].filter(Boolean).join(" · ");
+    S.title.replaceChildren(r.filename + "  ", el("span", { class: "badge " + (r.status === "ok" ? "ok" : "review"), text: L(r.status === "ok" ? "pv.badge_ok" : "pv.badge_review") }));
+    S.meta.textContent = [r.customer.name, r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
+      L("pv.rows", { n: S.n }), r.sources.join(" + ")].filter(Boolean).join(" · ");
     S.checks.hidden = false;
-    S.checks.replaceChildren(...r.checks.map((c) => el("span", { class: "pv-chip " + (c.ok ? "pass" : "fail"), title: c.detail },
-      (c.ok ? "✓ " : "✗ ") + c.name + " ", el("span", { class: "d", text: c.detail }))));
+    S.checks.replaceChildren(...r.checks.map((c) => el("span", { class: "pv-chip " + (c.ok ? "pass" : "fail"), title: checkDetail(c) },
+      (c.ok ? "✓ " : "✗ ") + checkName(c) + " ", el("span", { class: "d", text: checkDetail(c) }))));
 
     S.src = makePane("src");
     S.out = makePane("out");
@@ -222,13 +230,13 @@
       for (const f of fields) e.fields.set(f, worse(e.fields.get(f), level));
       for (const c of cols) e.cols.set(c, worse(e.cols.get(c), level));
     };
-    for (const f of S.result.flags || []) add(f.line, f.level, f.message, f.fields, f.columns);
+    for (const f of S.result.flags || []) add(f.line, f.level, flagText(f), f.fields, f.columns);
     for (const c of S.pv.grid.columns) {
       c.cells.forEach((cell, i) => {
         if (c.field && cell.v === "" && !(map.get(i + 1) && map.get(i + 1).cols.has(c.letter))) {
-          add(i + 1, "error", `${c.letter} ${c.header} 为空值`, [c.field], [c.letter]);
+          add(i + 1, "error", L("pv.empty_cell", { letter: c.letter, header: c.header }), [c.field], [c.letter]);
         }
-        if (cell.csv !== undefined) add(i + 1, "warning", `${c.letter} ${c.header}：Excel 显示 "${cell.v}"，CSV 中是 "${cell.csv}"`, [], [c.letter]);
+        if (cell.csv !== undefined) add(i + 1, "warning", L("pv.csv_diff", { letter: c.letter, header: c.header, v: cell.v, csv: cell.csv }), [], [c.letter]);
       });
     }
     return map;
@@ -239,11 +247,11 @@
     p.view = el("div", { class: "pane-view", tabindex: "0" });
     p.zoomLabel = el("span", { class: "pv-zoomval" });
     p.zoomBar = el("span", { class: "pv-group" },
-      btn("minus", null, "缩小 (-)", () => zoomBy(p, 1 / STEP)), p.zoomLabel, btn("plus", null, "放大 (+)", () => zoomBy(p, STEP)),
+      btn("minus", null, L("pv.zoom_out"), () => zoomBy(p, 1 / STEP)), p.zoomLabel, btn("plus", null, L("pv.zoom_in"), () => zoomBy(p, STEP)),
       el("span", { class: "pv-sep" }),
-      btn("fitw", "适应宽度", "适应宽度", () => fit(p, "fitw")),
-      btn("fit", "适应窗口", "适应窗口（整体可见）", () => fit(p, "fit")),
-      btn(null, "1:1", "恢复默认比例 100% (0)", () => { S.driver = p; setZoom(p, 1); }));
+      btn("fitw", L("pv.fit_width"), L("pv.fit_width"), () => fit(p, "fitw")),
+      btn("fit", L("pv.fit_window"), L("pv.fit_window_tip"), () => fit(p, "fit")),
+      btn(null, "1:1", L("pv.reset"), () => { S.driver = p; setZoom(p, 1); }));
     interactive(p);
     const ro = new ResizeObserver(() => { if (p.mode !== "manual") fit(p, p.mode, true); });
     ro.observe(p.view);
@@ -255,24 +263,24 @@
   function srcPane() {
     const p = S.src;
     p.pageInfo = el("span", { class: "pv-pageinfo" });
-    p.prevBtn = btn("prev", null, "上一页", () => goPage(S.page - 1));
-    p.nextBtn = btn("next", null, "下一页", () => goPage(S.page + 1));
-    p.tableBtn = el("button", { type: "button", text: "表格区域", title: "只显示明细表格（表头、明细行、Subtotal）" });
-    p.pageBtn = el("button", { type: "button", text: "整页", title: "显示整页原始发票" });
+    p.prevBtn = btn("prev", null, L("pv.prev_page"), () => goPage(S.page - 1));
+    p.nextBtn = btn("next", null, L("pv.next_page"), () => goPage(S.page + 1));
+    p.tableBtn = el("button", { type: "button", text: L("pv.table_area"), title: L("pv.table_area_tip") });
+    p.pageBtn = el("button", { type: "button", text: L("pv.whole_page"), title: L("pv.whole_page_tip") });
     p.tableBtn.onclick = () => setView("table");
     p.pageBtn.onclick = () => setView("page");
-    p.img = el("img", { alt: "原始发票" });
+    p.img = el("img", { alt: L("pv.original") });
     p.layer = el("div");
     p.sheet = el("div", { class: "pv-sheet" }, p.img, p.layer);
     p.gutter = el("div", { class: "pv-gutter" });
     p.doc = el("div", { class: "pv-doc" }, p.gutter, p.sheet);
     p.view.append(el("div", { class: "pv-stage" }, p.doc));
     const bar = el("div", { class: "pane-bar" },
-      el("span", { class: "pane-title" }, "原始 Invoice ", el("small", { text: "PDF" })),
+      el("span", { class: "pane-title" }, L("pv.original") + " ", el("small", { text: "PDF" })),
       el("span", { class: "pv-group" }, p.prevBtn, p.pageInfo, p.nextBtn),
       el("span", { class: "pv-seg" }, p.tableBtn, p.pageBtn),
       el("span", { class: "pane-sub" }, p.zoomBar));
-    return el("section", { class: "pane", "aria-label": "原始 Invoice" }, bar, p.view);
+    return el("section", { class: "pane", "aria-label": L("pv.original") }, bar, p.view);
   }
 
   function viewRect() {
@@ -295,7 +303,7 @@
     p.sheet.querySelector(".noimg")?.remove();
     if (pg.image) { p.img.hidden = false; p.img.src = pg.image; } else {
       p.img.hidden = true;
-      p.sheet.prepend(el("div", { class: "noimg", text: "这一页无法显示：" + (pg.error || "") }));
+      p.sheet.prepend(el("div", { class: "noimg", text: L("pv.page_error", { error: pg.error || "" }) }));
     }
     const layer = [], gutter = [];
     // a header gets the anchor of the gap before the first line below it, so scrolling stays in step
@@ -318,7 +326,7 @@
       const bad = S.result.checks.filter((c) => !c.ok && c.name.startsWith("Subtotal"));
       const badFields = new Set(bad.map((c) => c.name.replace(/^Subtotal\s*/, "")));
       const t = box(el("div", { class: "ov totals " + (bad.length ? "bad" : "good"), "data-anchor": S.n + 0.5, "data-sum": "1",
-        title: S.result.checks.filter((c) => c.name.startsWith("Subtotal")).map((c) => (c.ok ? "✓ " : "✗ ") + c.name + "：" + c.detail).join("\n") }), pv.totals.bbox);
+        title: S.result.checks.filter((c) => c.name.startsWith("Subtotal")).map((c) => (c.ok ? "✓ " : "✗ ") + L("pv.check_line", { name: checkName(c), detail: checkDetail(c) })).join("\n") }), pv.totals.bbox);
       for (const [f, c] of Object.entries(pv.totals.cells)) if (badFields.has(f)) t.append(box(el("div", { class: "c bad" }), c, "c"));
       layer.push(t);
       const sum = el("span", { class: "pv-no sum " + (bad.length ? "bad" : "good"), "data-sum": "1", title: t.title, text: "Σ" });
@@ -328,8 +336,8 @@
     p.layer.replaceChildren(...layer);
     p.gutter.replaceChildren(...gutter);
     const count = pv.pages.length;
-    p.pageInfo.textContent = `${S.page + 1} / ${count} 页`;
-    p.pageInfo.title = `${pg.source} 第 ${pg.page} / ${pg.page_count} 页` + (pv.skipped_pages ? `\n另有 ${pv.skipped_pages} 页（不含明细表格）未显示` : "");
+    p.pageInfo.textContent = L("pv.pages", { page: S.page + 1, count });
+    p.pageInfo.title = L("pv.page_tip", { source: pg.source, page: pg.page, total: pg.page_count }) + (pv.skipped_pages ? "\n" + L("pv.skipped", { n: pv.skipped_pages }) : "");
     p.prevBtn.disabled = S.page <= 0;
     p.nextBtn.disabled = S.page >= count - 1;
     p.tableBtn.disabled = !pg.table;
@@ -340,7 +348,7 @@
 
   function tip(n) {
     const iss = S.issues.get(n);
-    return `第 ${n} 行` + (iss ? "\n" + iss.list.map((x) => (x.level === "error" ? "✗ " : "⚠ ") + x.message).join("\n") : "");
+    return L("pv.row", { n }) + (iss ? "\n" + iss.list.map((x) => (x.level === "error" ? "✗ " : "⚠ ") + x.message).join("\n") : "");
   }
 
   function setPage(i) {
@@ -370,12 +378,12 @@
     const orig = el("input", { type: "checkbox" });
     orig.onchange = () => S.root.classList.toggle("show-orig", orig.checked);
     const bar = el("div", { class: "pane-bar" },
-      el("span", { class: "pane-title" }, "转换结果 ", el("small", { text: "CargoWise 模板 · 与导出的 Excel / CSV 相同" })),
-      el("label", { class: "pv-check", title: "在被转换过的单元格下显示 PDF 里的原文（例如去掉中文之前）" }, orig, "显示 PDF 原文"),
+      el("span", { class: "pane-title" }, L("pv.result") + " ", el("small", { text: L("pv.result_sub") })),
+      el("label", { class: "pv-check", title: L("pv.show_original_tip") }, orig, L("pv.show_original")),
       el("span", { class: "pane-sub" }, p.zoomBar));
     p.table = el("table", { class: "pv-xl" });
     p.view.append(el("div", { class: "pv-stage" }, p.table));
-    return el("section", { class: "pane", "aria-label": "转换结果" }, bar, p.view);
+    return el("section", { class: "pane", "aria-label": L("pv.result") }, bar, p.view);
   }
 
   const styled = (node, s) => {
@@ -399,7 +407,7 @@
     }
     if (prev < g.total_columns - 1) segs.push({ from: prev + 1, to: g.total_columns - 1 });
     const gapName = (s) => letter(s.from) + (s.to > s.from ? ":" + letter(s.to) : "");
-    const gapTip = (s) => `${gapName(s)}：${s.to - s.from + 1} 列，导出文件中为空`;
+    const gapTip = (s) => L("pv.gap_tip", { cols: gapName(s), n: s.to - s.from + 1 });
 
     const widths = [40, ...segs.map((s) => (s.letter ? s.width : 44))];
     const cols = el("colgroup", {}, ...widths.map((w) => el("col", { style: `width: calc(${w}px * var(--gz))` })));
@@ -407,7 +415,7 @@
     p.table.style.width = `calc(${widths.reduce((a, b) => a + b, 0)}px * var(--gz))`;
     const letters = el("tr", {}, el("th", { class: "ch rh" }),
       ...segs.map((s) => s.letter
-        ? el("th", { class: "ch" + (s.field ? " target" : ""), text: s.letter, title: s.field ? `${s.letter} ${s.header} ← PDF ${fieldLabel(s.field)}` : `${s.letter} ${s.header}（自动生成）` })
+        ? el("th", { class: "ch" + (s.field ? " target" : ""), text: s.letter, title: L(s.field ? "pv.col_from_pdf" : "pv.col_auto", { letter: s.letter, header: s.header, field: s.field ? fieldLabel(s.field) : "" }) })
         : el("th", { class: "ch gap", text: gapName(s), title: gapTip(s) })));
     const head = el("tr", {}, el("th", { class: "rh", text: String(g.header_row) }),
       ...segs.map((s) => (s.letter ? styled(el("th", { text: s.header }), s.head_style) : el("th", { class: "gap", title: gapTip(s) }))));
@@ -424,8 +432,8 @@
         const td = styled(el("td", { class: cls || null, "data-field": s.field || null, "data-copy": cell.v }), s.cell_style);
         td.append(cell.v);
         if (changed) {
-          td.title = `PDF 原文：${original}`;
-          td.append(el("span", { class: "orig", text: "PDF：" + (original || "（空）") }));
+          td.title = L("pv.pdf_text", { v: original });
+          td.append(el("span", { class: "orig", text: L("pv.pdf_short", { v: original || L("common.empty") }) }));
         }
         tr.append(td);
       }
@@ -536,7 +544,7 @@
     v.addEventListener("dblclick", () => {
       if (!S) return;
       const td = p.down && p.down.closest && p.down.closest("td[data-copy]");
-      if (td && td.dataset.copy && navigator.clipboard) navigator.clipboard.writeText(td.dataset.copy).then(() => toast("已复制：" + td.dataset.copy), () => {});
+      if (td && td.dataset.copy && navigator.clipboard) navigator.clipboard.writeText(td.dataset.copy).then(() => toast(L("pv.copied", { v: td.dataset.copy })), () => {});
     });
   }
 
@@ -652,10 +660,10 @@
     const errors = lines.filter((n) => S.issues.get(n).level === "error").length;
     const warnings = lines.length - errors;
     const at = S.sel != null ? lines.indexOf(S.sel) : -1;
-    const text = !lines.length ? "✓ 未发现问题"
-      : (at >= 0 ? `第 ${at + 1}/${lines.length} 处 · ` : "") + [errors && `${errors} 行错误`, warnings && `${warnings} 行警告`].filter(Boolean).join(" · ");
-    const prev = btn("up", "上一个", "上一个问题", () => jump(-1));
-    const next = btn("down", "下一个", "下一个问题", () => jump(1));
+    const text = !lines.length ? L("pv.no_issues")
+      : (at >= 0 ? L("pv.issue_pos", { i: at + 1, n: lines.length }) : "") + [errors && L("pv.errors_n", { n: errors }), warnings && L("pv.warnings_n", { n: warnings })].filter(Boolean).join(" · ");
+    const prev = btn("up", L("pv.prev"), L("pv.prev_tip"), () => jump(-1));
+    const next = btn("down", L("pv.next"), L("pv.next_tip"), () => jump(1));
     prev.disabled = next.disabled = !lines.length;
     S.issueBox.replaceChildren(prev, el("span", { class: "count " + (errors ? "error" : warnings ? "warning" : "ok"), text }), next);
   }
@@ -671,45 +679,45 @@
 
   function detail(n) {
     if (n == null) {
-      S.detail.replaceChildren(el("div", { class: "empty", text: "点击左侧发票或右侧表格的任意一行，查看这一行的逐项对照；↑ ↓ 键逐行移动，Ctrl + 滚轮缩放，按住拖动查看。" }));
+      S.detail.replaceChildren(el("div", { class: "empty", text: L("pv.help") }));
       return;
     }
     const line = S.pv.lines[n - 1], pg = line && line.page != null ? S.pv.pages[line.page] : null;
     const item = S.pv.items[n - 1] || {}, iss = S.issues.get(n);
-    const value = (v) => el("b", { text: v === "" || v == null ? "（空）" : v });
+    const value = (v) => el("b", { text: v === "" || v == null ? L("common.empty") : v });
     const pdf = el("dd", {}, ...S.pv.fields.map((f) => el("span", {}, el("i", { text: f.label + " " }), value(item[f.name]))));
     const out = el("dd", {}, ...S.pv.grid.columns.map((c) => el("span", {}, el("i", { text: `${c.letter} ${c.header} ` }), value(c.cells[n - 1].v))));
     const checks = iss
       ? el("ul", {}, ...iss.list.map((x) => el("li", { class: x.level, text: (x.level === "error" ? "✗ " : "⚠ ") + x.message })))
-      : el("span", { text: "✓ 这一行没有发现问题" });
+      : el("span", { text: L("pv.row_ok") });
     S.detail.replaceChildren(
-      el("h3", {}, `第 ${n} 行 `, el("span", { text: `· Excel 第 ${S.pv.grid.header_row + n} 行` + (pg ? ` · ${pg.source} 第 ${pg.page} 页` : "") })),
-      el("dl", {}, el("dt", { text: "PDF 原文" }), pdf, el("dt", { text: "导出结果" }), out, el("dt", { text: "校验" }), el("dd", {}, checks)));
+      el("h3", {}, L("pv.detail_head", { n }), el("span", { text: L("pv.detail_where", { row: S.pv.grid.header_row + n }) + (pg ? L("pv.detail_page", { source: pg.source, page: pg.page }) : "") })),
+      el("dl", {}, el("dt", { text: L("pv.pdf_values") }), pdf, el("dt", { text: L("pv.export_values") }), out, el("dt", { text: L("pv.checks") }), el("dd", {}, checks)));
   }
 
   function detailTotals() {
     const t = S.pv.totals_values || {};
     const checks = S.result.checks.filter((c) => c.name.startsWith("Subtotal"));
     S.detail.replaceChildren(
-      el("h3", { text: "Subtotal 合计行" }),
+      el("h3", { text: L("pv.subtotal") }),
       el("dl", {},
-        el("dt", { text: "PDF 合计" }), el("dd", {}, ...S.pv.fields.filter((f) => t[f.name]).map((f) => el("span", {}, el("i", { text: f.label + " " }), el("b", { text: t[f.name] })))),
-        el("dt", { text: "校验" }), el("dd", {}, el("ul", {}, ...checks.map((c) => el("li", { class: c.ok ? "" : "error", text: (c.ok ? "✓ " : "✗ ") + c.name + "：" + c.detail }))))));
+        el("dt", { text: L("pv.pdf_totals") }), el("dd", {}, ...S.pv.fields.filter((f) => t[f.name]).map((f) => el("span", {}, el("i", { text: f.label + " " }), el("b", { text: t[f.name] })))),
+        el("dt", { text: L("pv.checks") }), el("dd", {}, el("ul", {}, ...checks.map((c) => el("li", { class: c.ok ? "" : "error", text: (c.ok ? "✓ " : "✗ ") + L("pv.check_line", { name: checkName(c), detail: checkDetail(c) }) }))))));
   }
 
   function footer() {
     const r = S.result, download = S.opts.download;
     if (S.opts.actions) { // a saved document: the caller's buttons (export through the documents API)
       const open = S.issueLines.length;
-      S.actions.replaceChildren(el("span", { class: "hint", text: open ? `还有 ${open} 行需复核` : "已对照：可以导出" }), ...S.opts.actions(r));
+      S.actions.replaceChildren(el("span", { class: "hint", text: open ? L("pv.open_rows", { n: open }) : L("pv.ready") }), ...S.opts.actions(r));
       return;
     }
-    const csv = el("button", { type: "button", class: "primary", text: "下载 CSV" });
+    const csv = el("button", { type: "button", class: "primary", text: L("pv.download_csv") });
     csv.onclick = () => download(r.content_base64, r.filename, "text/csv");
-    const xlsx = el("button", { type: "button", class: "secondary", text: "下载 Excel" });
+    const xlsx = el("button", { type: "button", class: "secondary", text: L("pv.download_xlsx") });
     xlsx.onclick = () => download(r.xlsx_base64, r.xlsx_filename, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     const open = S.issueLines.length;
-    const hint = el("span", { class: "hint", text: open ? `还有 ${open} 行需复核，确认无误后再导出` : "已对照：可以导出" });
+    const hint = el("span", { class: "hint", text: open ? L("pv.open_rows_long", { n: open }) : L("pv.ready") });
     S.actions.replaceChildren(hint, csv, r.xlsx_base64 ? xlsx : null);
   }
 

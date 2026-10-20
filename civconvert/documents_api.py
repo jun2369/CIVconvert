@@ -1,7 +1,7 @@
-"""HTTP API of the documents (logged-in users; all users see all documents, the list defaults to "mine").
+"""HTTP API of the documents (logged-in users; everyone only sees and changes their own documents).
 
     POST /api/documents                  upload PDF(s) -> documents (status processing)
-    GET  /api/documents                  list: status, q, created_from/to, mine, page
+    GET  /api/documents                  list: status, q, created_from/to, page
     GET  /api/documents/stats            dashboard counts
     GET  /api/documents/{id}             document, template columns, sheet, extraction, exports
     PUT  /api/documents/{id}/sheet       save the sheet {revision, rows, reason}
@@ -71,23 +71,22 @@ def list_documents(
     q: str | None = Query(default=None, max_length=200),
     created_from: datetime | None = None,
     created_to: datetime | None = None,
-    mine: bool = True,
     page: int = 1,
     page_size: int = 50,
 ) -> dict[str, Any]:
     docs.expire_stuck(db)
-    return docs.list_documents(db, user, status=status, q=q, created_from=created_from, created_to=created_to, mine=mine, page=page, page_size=page_size)
+    return docs.list_documents(db, user, status=status, q=q, created_from=created_from, created_to=created_to, page=page, page_size=page_size)
 
 
 @router.get("/stats")
-def stats(user: CurrentUser, db: DB, mine: bool = True, since: datetime | None = None) -> dict[str, int]:
+def stats(user: CurrentUser, db: DB, since: datetime | None = None) -> dict[str, int]:
     """since: the start of "today" in the user's time zone."""
-    return docs.stats(db, user, mine, since)
+    return docs.stats(db, user, since)
 
 
 @router.get("/{doc_id}")
 def detail(doc_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return docs.detail_json(db, docs.get_document(db, doc_id))
+    return docs.detail_json(db, docs.get_document(db, doc_id, user))
 
 
 class SheetIn(BaseModel):
@@ -99,13 +98,13 @@ class SheetIn(BaseModel):
 
 @router.put("/{doc_id}/sheet")
 def save_sheet(doc_id: str, body: SheetIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    doc = docs.get_document(db, doc_id)
+    doc = docs.get_document(db, doc_id, user)
     return docs.save_sheet(db, doc, user, body.rows, body.revision, body.reason, body.force)
 
 
 @router.post("/{doc_id}/export")
 def export(doc_id: str, user: CurrentUser, db: DB, format: str = "csv", revision: int | None = None) -> Response:
-    filename, data, media = docs.export(db, docs.get_document(db, doc_id), user, format, revision)
+    filename, data, media = docs.export(db, docs.get_document(db, doc_id, user), user, format, revision)
     return Response(data, media_type=media, headers=_attachment(filename))
 
 
@@ -115,12 +114,12 @@ class ConfirmIn(BaseModel):
 
 @router.post("/{doc_id}/confirm")
 def confirm(doc_id: str, body: ConfirmIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return {"document": docs.doc_json(docs.confirm(db, docs.get_document(db, doc_id), user, body.revision))}
+    return {"document": docs.doc_json(docs.confirm(db, docs.get_document(db, doc_id, user), user, body.revision))}
 
 
 @router.post("/{doc_id}/reopen")
 def reopen(doc_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return {"document": docs.doc_json(docs.reopen(db, docs.get_document(db, doc_id), user))}
+    return {"document": docs.doc_json(docs.reopen(db, docs.get_document(db, doc_id, user), user))}
 
 
 class RetryIn(BaseModel):
@@ -129,33 +128,34 @@ class RetryIn(BaseModel):
 
 @router.post("/{doc_id}/retry")
 def retry(doc_id: str, body: RetryIn, user: CurrentUser, db: DB) -> dict[str, Any]:
-    doc = docs.retry(db, docs.get_document(db, doc_id), user, body.customer or None)
+    doc = docs.retry(db, docs.get_document(db, doc_id, user), user, body.customer or None)
     db.refresh(doc)
     return {"document": docs.doc_json(doc)}
 
 
 @router.get("/{doc_id}/files/{file_id}")
 def original(doc_id: str, file_id: int, user: CurrentUser, db: DB) -> Response:
+    docs.get_document(db, doc_id, user)
     row = db.get(DocumentFile, file_id)
     if row is None or row.document_id != doc_id:
-        raise docs.DocumentError(404, "文件不存在")
+        raise docs.DocumentError(404, "file_not_found", "File not found")
     try:
         data = storage.get(row)
     except storage.StorageError as e:
-        raise docs.DocumentError(500, str(e)) from e
+        raise docs.DocumentError(500, "storage_error", str(e), {"error": str(e)}) from e
     return Response(data, media_type="application/pdf", headers=_attachment(row.filename, inline=True))
 
 
 @router.get("/{doc_id}/preview")
 def document_preview(doc_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return docs.preview_payload(db, docs.get_document(db, doc_id))
+    return docs.preview_payload(db, docs.get_document(db, doc_id, user))
 
 
 @router.get("/{doc_id}/log")
 def audit_log(doc_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return {"log": docs.log_json(db, docs.get_document(db, doc_id))}
+    return {"log": docs.log_json(db, docs.get_document(db, doc_id, user))}
 
 
 @router.get("/{doc_id}/versions")
 def versions(doc_id: str, user: CurrentUser, db: DB) -> dict[str, Any]:
-    return {"versions": docs.versions_json(db, docs.get_document(db, doc_id))}
+    return {"versions": docs.versions_json(db, docs.get_document(db, doc_id, user))}
