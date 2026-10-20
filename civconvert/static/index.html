@@ -63,14 +63,13 @@
       </label>
       <div>
         <div class="drop" id="drop">
-          <strong data-i18n="upload.drop">Drop PDFs here</strong> <span data-i18n="upload.or">or</span>
-          <button type="button" class="link" id="pick" data-i18n="upload.pick">choose files</button> <span data-i18n="upload.multi">(several allowed)</span>
-          <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+          <strong data-i18n="upload.drop">Drop a PDF here</strong> <span data-i18n="upload.or">or</span>
+          <button type="button" class="link" id="pick" data-i18n="upload.pick">choose a file</button> <span data-i18n="upload.one">(one PDF at a time)</span>
+          <input type="file" id="file" accept="application/pdf,.pdf" hidden>
           <div class="hint" data-i18n="upload.hint">Each invoice is saved as a document you can come back to and keep editing</div>
         </div>
         <ul class="files" id="filelist"></ul>
         <div class="uploadbar">
-          <label class="check" id="mergeRow" hidden><input type="checkbox" id="merge"> <span data-i18n="upload.merge">These PDFs are parts of one invoice</span></label>
           <button type="button" class="btn primary" id="go" disabled data-i18n="upload.go">Upload and convert</button>
           <span class="hint" id="upStatus"></span>
         </div>

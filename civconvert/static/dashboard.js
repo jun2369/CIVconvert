@@ -160,21 +160,20 @@
   function renderFiles() {
     $("#filelist").replaceChildren(...files.map((f, i) => el("li", {}, el("span", { text: f.name }),
       el("span", { class: "hint" }, fmtSize(f.size) + " ", el("button", { type: "button", class: "link", onclick: () => { files.splice(i, 1); renderFiles(); } }, t("upload.remove"))))));
-    $("#mergeRow").hidden = files.length < 2;
     $("#go").disabled = files.length === 0;
   }
   function addFiles(list) {
-    for (const f of list) {
-      if (!/\.pdf$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); continue; }
-      if (!files.some((x) => x.name === f.name && x.size === f.size)) files.push(f);
-    }
+    if (!list.length) return;
+    if (list.length > 1) { toast(t("upload.one_only"), "err"); return; } // one invoice PDF per upload
+    const f = list[0];
+    if (!/\.pdf$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); return; }
+    files.splice(0, files.length, f); // a new choice replaces the previous one
     renderFiles();
   }
   async function upload() {
     const fd = new FormData();
     for (const f of files) fd.append("files", f, f.name);
     if ($("#customer").value) fd.append("customer", $("#customer").value);
-    if (files.length > 1) fd.append("merge", $("#merge").checked ? "true" : "false");
     $("#go").disabled = true;
     $("#upStatus").replaceChildren(el("span", { class: "spin" }), " " + t("upload.uploading"));
     try {
@@ -182,11 +181,7 @@
       files.length = 0;
       renderFiles();
       $("#upStatus").textContent = "";
-      if (documents.length === 1) { location.href = `/documents/${documents[0].id}`; return; }
-      toast(t("upload.done_many", { n: documents.length }));
-      Object.assign(state, { status: "", q: "", from: "", to: "", page: 1 });
-      syncControls();
-      refresh();
+      location.href = `/documents/${documents[0].id}`;
     } catch (e) {
       $("#upStatus").textContent = "";
       toast(t("upload.failed", { error: e.message }), "err");
@@ -204,8 +199,6 @@
   $("#go").onclick = upload;
   $("#customer").onchange = (e) => {
     try { localStorage.setItem("civconvert.customer", e.target.value); } catch { /* private mode */ }
-    const c = customers.find((x) => x.id === e.target.value);
-    $("#merge").checked = !!c && c.multi_file === "merge";
   };
   let typing;
   $("#q").addEventListener("input", (e) => { clearTimeout(typing); typing = setTimeout(() => { state.q = e.target.value; state.page = 1; refresh(); }, 300); });

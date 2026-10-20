@@ -48,17 +48,15 @@ def _attachment(filename: str, inline: bool = False) -> dict[str, str]:
 async def upload(
     user: CurrentUser,
     db: DB,
-    files: Annotated[list[UploadFile], File(description="Commercial Invoice PDF(s)")],
+    files: Annotated[list[UploadFile], File(description="ONE Commercial Invoice PDF (more files are refused)")],
     customer: Annotated[str | None, Form()] = None,
-    merge: Annotated[bool | None, Form(description="true = the PDFs are parts of one invoice")] = None,
 ) -> dict[str, Any]:
     inputs = [InputFile(f.filename or "invoice.pdf", await f.read()) for f in files]
 
     def create() -> list[dict[str, Any]]:
-        created = docs.create_documents(db, user, inputs, customer or None, merge)
-        for d in created:
-            db.refresh(d)  # the conversion may already have finished
-        return [docs.doc_json(d) for d in created]
+        created = docs.create_document(db, user, inputs, customer or None)
+        db.refresh(created)  # the conversion may already have finished
+        return [docs.doc_json(created)]
 
     return {"documents": await run_in_threadpool(create)}
 

@@ -40,13 +40,12 @@ from .models import (
     SheetVersion,
     User,
 )
-from .pipeline import ConversionError, InputFile, Result, convert, resolve_customer
+from .pipeline import ConversionError, InputFile, Result, convert
 from .profiles import ConfigError, CustomerProfile, load_customers, load_template_profile
 from .template import Template, load_template
 
 log = logging.getLogger("civconvert")
 
-MAX_FILES = 20
 MAX_FILE_MB = 25
 VERSION_EVERY = timedelta(minutes=10)  # autosaves keep a snapshot at most this often
 LOG_MERGE = timedelta(minutes=10)  # autosaves by the same user within this time are one log entry
@@ -73,8 +72,8 @@ def _stem(name: str) -> str:
 def check_upload(files: list[InputFile]) -> None:
     if not files:
         raise DocumentError(422, "no_files", "No file uploaded")
-    if len(files) > MAX_FILES:
-        raise DocumentError(422, "too_many_files", f"At most {MAX_FILES} files at a time", {"max": MAX_FILES})
+    if len(files) > 1:  # one invoice PDF per upload, so files of different invoices are never mixed up
+        raise DocumentError(422, "one_file_only", "Upload one PDF at a time")
     for f in files:
         if len(f.data) > MAX_FILE_MB * 1024 * 1024:
             raise DocumentError(422, "file_too_large", f"{f.name}: larger than {MAX_FILE_MB} MB", {"name": f.name, "mb": MAX_FILE_MB})
@@ -82,41 +81,24 @@ def check_upload(files: list[InputFile]) -> None:
             raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF file", {"name": f.name})
 
 
-def _groups(files: list[InputFile], customer: str | None, merge: bool | None) -> list[list[InputFile]]:
-    """One document per PDF, or one document for all of them (parts of one invoice)."""
-    if len(files) == 1:
-        return [files]
-    if merge is None:  # the customer's profile decides (output.multi_file)
-        try:
-            text = extract.read_text(files[0].data, files[0].name)
-            merge = resolve_customer(load_customers(), customer, None, text).multi_file == "merge"
-        except (extract.PdfError, ConversionError, ConfigError):
-            merge = False
-    return [files] if merge else [[f] for f in files]
-
-
-def create_documents(db: Session, user: User, files: list[InputFile], customer: str | None, merge: bool | None) -> list[Document]:
+def create_document(db: Session, user: User, files: list[InputFile], customer: str | None) -> Document:
+    """The uploaded invoice PDF becomes a document; the conversion runs in the background."""
     check_upload(files)
-    docs = []
-    for group in _groups(files, customer, merge):
-        now = utcnow()
-        name = _stem(group[0].name) + (f" (+{len(group) - 1})" if len(group) > 1 else "")
-        doc = Document(
-            name=name[:255], status=PROCESSING, options={"customer": customer, "merge": len(group) > 1},
-            created_by=user.id, created_at=now, updated_by=user.id, updated_at=now,
-        )
-        db.add(doc)
-        db.flush()
-        for i, f in enumerate(group):
-            row = DocumentFile(document_id=doc.id, position=i, filename=f.name[:255], content_type="application/pdf", created_at=now)
-            storage.put(row, f.data)
-            db.add(row)
-        audit(db, "document.created", user.id, doc, files=[f.name for f in group], customer=customer)
-        docs.append(doc)
+    [f] = files
+    now = utcnow()
+    doc = Document(
+        name=_stem(f.name)[:255], status=PROCESSING, options={"customer": customer},
+        created_by=user.id, created_at=now, updated_by=user.id, updated_at=now,
+    )
+    db.add(doc)
+    db.flush()
+    row = DocumentFile(document_id=doc.id, position=0, filename=f.name[:255], content_type="application/pdf", created_at=now)
+    storage.put(row, f.data)
+    db.add(row)
+    audit(db, "document.created", user.id, doc, files=[f.name], customer=customer)
     db.commit()
-    for doc in docs:
-        jobs.submit(process, doc.id)
-    return docs
+    jobs.submit(process, doc.id)
+    return doc
 
 
 def extraction_data(result: Result) -> dict[str, Any]:

@@ -216,3 +216,13 @@ def test_flags_and_errors_carry_codes_for_translation(user_client):
     assert all(c["code"] and c["detail"].isascii() for c in checks.values())
     res = user_client.post("/api/documents", files={"files": ("x.pdf", b"hello", "application/pdf")})
     assert res.status_code == 422 and res.json()["code"] == "not_pdf" and res.json()["params"] == {"name": "x.pdf"}
+
+
+def test_one_pdf_per_upload(user_client):
+    before = user_client.get("/api/documents").json()["total"]
+    pdf = problem_invoice()
+    res = user_client.post("/api/documents", files=[("files", ("a.pdf", pdf, "application/pdf")), ("files", ("b.pdf", pdf, "application/pdf"))])
+    assert res.status_code == 422 and res.json()["code"] == "one_file_only"
+    assert user_client.get("/api/documents").json()["total"] == before  # nothing was created
+    [doc] = user_client.post("/api/documents", files={"files": ("a.pdf", pdf, "application/pdf")}).json()["documents"]
+    assert doc["name"] == "a" and [f["filename"] for f in doc["files"]] == ["a.pdf"]
