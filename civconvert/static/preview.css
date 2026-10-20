@@ -47,11 +47,6 @@
 .pv-issues .count.error { color: var(--err); background: var(--err-bg); }
 .pv-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 
-.pv-checks { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
-.pv-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
-.pv-chip.pass { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
-.pv-chip.fail { color: var(--err); background: var(--err-bg); border-color: transparent; font-weight: 600; }
-.pv-chip .d { color: var(--muted); font-weight: 400; }
 
 .pv-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; padding: 10px; }
 .pv[data-layout="stack"] .pv-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
@@ -173,7 +168,7 @@
 @media (max-width: 760px) {
   .pv { width: 100vw; border-left: 0; }
   .pv-resize { display: none; }
-  .pv-head, .pv-checks, .pv-foot { padding-left: 10px; padding-right: 10px; }
+  .pv-head, .pv-foot { padding-left: 10px; padding-right: 10px; }
   .pv-body { padding: 6px; gap: 6px; }
   .pv-btn .lbl:not(:only-child) { display: none; }
   .pv-detail { max-height: 20vh; }

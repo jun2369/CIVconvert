@@ -110,14 +110,13 @@
     const tools = el("div", { class: "pv-tools" }, S.issueBox,
       el("label", { class: "pv-check", title: L("pv.sync_tip") }, sync, L("pv.sync")),
       S.layoutBtn, S.fullBtn, btn("close", null, L("pv.close"), close));
-    S.checks = el("div", { class: "pv-checks", hidden: "" });
     S.body = el("div", { class: "pv-body" }, el("div", { class: "pv-msg" }, el("span", { class: "pv-spin" }), L("pv.loading")));
     S.detail = el("div", { class: "pv-detail" });
     S.actions = el("div", { class: "pv-actions" });
     const resize = el("div", { class: "pv-resize", title: L("pv.resize") });
     S.root.append(resize,
       el("header", { class: "pv-head" }, el("div", { class: "pv-title" }, S.title, S.meta), tools),
-      S.checks, S.body, el("footer", { class: "pv-foot" }, S.detail, S.actions));
+      S.body, el("footer", { class: "pv-foot" }, S.detail, S.actions));
     resizable(resize);
 
     S.overflow = document.documentElement.style.overflow;
@@ -200,9 +199,6 @@
     S.title.replaceChildren(r.filename + "  ", el("span", { class: "badge " + (r.status === "ok" ? "ok" : "review"), text: L(r.status === "ok" ? "pv.badge_ok" : "pv.badge_review") }));
     S.meta.textContent = [r.customer.name, r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
       L("pv.rows", { n: S.n }), r.sources.join(" + ")].filter(Boolean).join(" · ");
-    S.checks.hidden = false;
-    S.checks.replaceChildren(...r.checks.map((c) => el("span", { class: "pv-chip " + (c.ok ? "pass" : "fail"), title: checkDetail(c) },
-      (c.ok ? "✓ " : "✗ ") + checkName(c) + " ", el("span", { class: "d", text: checkDetail(c) }))));
 
     S.src = makePane("src");
     S.out = makePane("out");
