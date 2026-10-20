@@ -3,7 +3,9 @@
    or moved. Rows can be edited, inserted and deleted. Formulas are computed with CIVFormula.
    Every change of data is one undoable action:
      { label, cells: [{id, c, before, after}], del: [{index, row}], ins: [{index, row}] }
-   (cells by row id, so actions stay valid while rows move). Only the visible rows are drawn. */
+   (cells by row id, so actions stay valid while rows move). Only the visible rows are drawn.
+   While a formula is typed (in the cell or in opts.formulaBar), clicking / dragging over cells or the arrow
+   keys put their reference in, like in Excel, and the cells it refers to are outlined in colour. */
 (() => {
   "use strict";
   const F = window.CIVFormula;
@@ -57,6 +59,7 @@
       this.totalW = x;
       this.lnoCol = this.columns.findIndex((c) => this.roles[c.letter] && this.roles[c.letter].line_no);
       this.headers = this.columns.map((c) => c.header);
+      this.colByLetter = new Map(this.columns.map((c, i) => [c.letter, i]));
       this.readOnly = !!opts.readOnly;
       this.rows = [];
       this.calc = new Map();
@@ -68,6 +71,7 @@
       this.undoStack = [];
       this.redoStack = [];
       this.editing = null;
+      this.point = null; // the reference just put into a formula by pointing at cells
       this.clipboard = null;
       this.marquee = null;
       this.build(host);
@@ -125,7 +129,7 @@
       inp.addEventListener("keydown", (e) => this.onKey(e));
       inp.addEventListener("input", () => {
         if (!this.editing && inp.value) this.beginEdit("enter", true);
-        else if (this.editing) { this.fitEditor(); this.opts.onEditInput && this.opts.onEditInput(inp.value); }
+        else if (this.editing) { this.fitEditor(); this.opts.onEditInput && this.opts.onEditInput(inp.value); this.renderSelection(); }
       });
       inp.addEventListener("compositionstart", () => { if (!this.editing) this.beginEdit("enter", true); });
       inp.addEventListener("copy", (e) => { if (!this.editing) { e.preventDefault(); this.copy(e.clipboardData, false); } });
@@ -136,6 +140,8 @@
         this.paste(e.clipboardData.getData("text/plain"));
       });
       inp.addEventListener("blur", () => { if (this.editing && !this.keepEditing) this.commitEdit(null); });
+      const bar = this.opts.formulaBar; // a formula typed there: its references are outlined too
+      if (bar) for (const type of ["input", "focus", "blur"]) bar.addEventListener(type, () => this.renderSelection());
     }
 
     // ───────────── data ─────────────
@@ -433,6 +439,7 @@
       if (!this.rows.length) { this.input.value = ""; return; }
       const { r, c } = this.active;
       this.editing = { r, c, mode, original: this.raw(r, c) };
+      this.point = null;
       if (!typed) this.input.value = this.raw(r, c);
       this.marquee = null;
       this.ensureVisible(r, c);
@@ -449,6 +456,7 @@
       const { r, c } = this.editing;
       const text = this.input.value.replace(/\r?\n/g, " ");
       this.editing = null;
+      this.point = null;
       this.input.classList.remove("editing");
       this.input.value = "";
       this.setCells([{ r, c, after: content(text) }], `Edit ${this.address(r, c)}`);
@@ -459,6 +467,7 @@
     cancelEdit() {
       if (!this.editing) return;
       this.editing = null;
+      this.point = null;
       this.input.classList.remove("editing");
       this.input.value = "";
       this.placeEditor();
@@ -470,6 +479,7 @@
     setActiveContent(text) {
       if (this.readOnly || !this.rows.length) return;
       this.cancelEdit();
+      this.point = null;
       const { r, c } = this.active;
       this.setCells([{ r, c, after: content(text) }], `Edit ${this.address(r, c)}`);
     }
@@ -489,6 +499,51 @@
       this.input.style.width = col.width + "px";
       const need = Math.min(Math.max(col.width, this.input.scrollWidth + 8), 520);
       this.input.style.width = need + "px";
+    }
+
+    // ───────────── formulas: pointing at cells, like in Excel ─────────────
+    /** The text box a formula is being typed in: the cell editor, or the formula bar (opts.formulaBar). */
+    formulaInput() {
+      if (this.editing) return this.input.value.startsWith("=") ? this.input : null;
+      const bar = this.opts.formulaBar;
+      return bar && !this.readOnly && !bar.readOnly && document.activeElement === bar && bar.value.startsWith("=") ? bar : null;
+    }
+
+    /** Is the caret still right after the reference just put in by pointing? */
+    pointActive(input) {
+      const p = this.point;
+      return !!p && p.input === input && input.selectionStart === p.end && input.selectionEnd === p.end && input.value.slice(p.start, p.end) === p.text;
+    }
+
+    /** A reference can go in right after "=", an operator, "(" or "," (not inside "text"), or replace the one just put in. */
+    canPoint(input) {
+      if (this.pointActive(input)) return true;
+      const before = input.value.slice(0, input.selectionStart);
+      if ((before.match(/"/g) || []).length % 2) return false;
+      return /[=+\-*\/^&(,:<>]\s*$/.test(before);
+    }
+
+    /** Put the reference of anchor..focus (a cell or a range) at the caret, or in place of the one just put in. */
+    pointAt(input, anchor, focus) {
+      const r1 = Math.min(anchor.r, focus.r), r2 = Math.max(anchor.r, focus.r), c1 = Math.min(anchor.c, focus.c), c2 = Math.max(anchor.c, focus.c);
+      const text = r1 === r2 && c1 === c2 ? this.address(r1, c1) : `${this.address(r1, c1)}:${this.address(r2, c2)}`;
+      const again = this.pointActive(input);
+      const start = again ? this.point.start : input.selectionStart;
+      const end = again ? this.point.end : input.selectionEnd;
+      input.value = input.value.slice(0, start) + text + input.value.slice(end);
+      input.setSelectionRange(start + text.length, start + text.length);
+      this.point = { input, start, end: start + text.length, text, anchor, focus };
+      if (input === this.input) { this.fitEditor(); this.opts.onEditInput && this.opts.onEditInput(input.value); }
+      this.renderSelection();
+    }
+
+    /** Arrow keys while a formula is typed in the cell: move (Shift: stretch) the reference. */
+    pointMove(d, extend) {
+      const p = this.pointActive(this.input) ? this.point : null;
+      const from = p ? p.focus : { r: this.editing.r, c: this.editing.c };
+      const focus = { r: Math.max(0, Math.min(from.r + d[0], this.rows.length - 1)), c: Math.max(0, Math.min(from.c + d[1], this.width - 1)) };
+      this.pointAt(this.input, extend && p ? p.anchor : focus, focus);
+      this.ensureVisible(focus.r, focus.c);
     }
 
     // ───────────── selection ─────────────
@@ -601,6 +656,15 @@
       if (e.clientX - vr.left >= this.view.clientWidth || e.clientY - vr.top >= this.view.clientHeight) return; // scrollbar
       const hit = this.hit(e);
       if (e.target === this.input && this.editing) return; // clicking inside the cell editor
+      const fx = hit && hit.kind === "cell" && e.button === 0 ? this.formulaInput() : null;
+      if (fx && this.canPoint(fx)) { // a formula is being typed: the cell's reference goes into it (drag = a range)
+        e.preventDefault(); // the text box keeps the focus
+        const anchor = e.shiftKey && this.pointActive(fx) ? this.point.anchor : { r: hit.r, c: hit.c };
+        this.pointAt(fx, anchor, { r: hit.r, c: hit.c });
+        this.drag = { kind: "point", input: fx, anchor };
+        this.trackDrag();
+        return;
+      }
       e.preventDefault();
       if (this.editing) this.commitEdit(null);
       this.input.focus({ preventScroll: true });
@@ -641,6 +705,10 @@
         this.renderSelection();
         this.emitSelect();
       }
+      this.trackDrag();
+    }
+
+    trackDrag() {
       const move = (ev) => this.onDrag(ev);
       const up = () => {
         this.drag = null;
@@ -658,12 +726,15 @@
       const rect = this.cellLayer.getBoundingClientRect();
       const r = Math.max(0, Math.min(Math.floor((e.clientY - rect.top) / ROW_H), this.rows.length - 1));
       const c = this.colAt(e.clientX - rect.left);
-      const g = this.ranges[this.ranges.length - 1];
-      if (this.drag.kind === "cell") { g.r2 = r; g.c2 = c; this.focusEnd = { r, c }; }
-      else if (this.drag.kind === "row") { g.r1 = this.drag.from; g.r2 = r; }
-      else { g.c1 = this.drag.from; g.c2 = c; }
-      this.renderSelection();
-      this.emitSelect();
+      if (this.drag.kind === "point") this.pointAt(this.drag.input, this.drag.anchor, { r, c });
+      else {
+        const g = this.ranges[this.ranges.length - 1];
+        if (this.drag.kind === "cell") { g.r2 = r; g.c2 = c; this.focusEnd = { r, c }; }
+        else if (this.drag.kind === "row") { g.r1 = this.drag.from; g.r2 = r; }
+        else { g.c1 = this.drag.from; g.c2 = c; }
+        this.renderSelection();
+        this.emitSelect();
+      }
       // keep scrolling while the pointer is outside the grid
       cancelAnimationFrame(this.autoScroll);
       const vr = this.view.getBoundingClientRect();
@@ -722,7 +793,8 @@
         else if (enterMode && e.key.startsWith("Arrow")) {
           e.preventDefault();
           const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
-          this.commitEdit(d);
+          if (this.input.value.startsWith("=") && this.canPoint(this.input)) this.pointMove(d, e.shiftKey);
+          else this.commitEdit(d);
         }
         return;
       }
@@ -840,6 +912,12 @@
       const multi = this.ranges.length > 1 || this.ranges.some((g) => g.r1 !== g.r2 || g.c1 !== g.c2);
       if (multi) for (const g of this.ranges) rect(g, "sh-sel");
       if (this.marquee) rect(this.marquee, "sh-ants");
+      const fx = this.formulaInput();
+      if (fx) F.references(fx.value).forEach((g, i) => { // the cells the formula being typed refers to
+        const c1 = this.colByLetter.get(F.colLetter(g.c1)), c2 = this.colByLetter.get(F.colLetter(g.c2));
+        const r1 = Math.max(g.r1 - this.headerRow - 1, 0), r2 = g.r2 - this.headerRow - 1;
+        if (c1 !== undefined && c2 !== undefined && r2 >= 0) rect({ r1, c1, r2, c2 }, `sh-ref k${i % 6}`);
+      });
       if (this.rows.length) rect({ r1: this.active.r, c1: this.active.c, r2: this.active.r, c2: this.active.c }, "sh-act");
       this.selBox.innerHTML = parts.join("");
       // header highlights

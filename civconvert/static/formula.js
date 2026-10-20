@@ -55,6 +55,34 @@
     return tokens;
   }
 
+  /** The cell references in a formula, also while it is still being typed (what cannot be read yet is skipped):
+      [{ c1, r1, c2, r2 }] – columns 0-based, rows = Excel row numbers. For outlining them while the formula is typed. */
+  function references(formula) {
+    const text = formula.startsWith("=") ? formula.slice(1) : formula;
+    const tokens = [];
+    TOKEN.lastIndex = 0;
+    while (TOKEN.lastIndex < text.length) {
+      const start = TOKEN.lastIndex;
+      const m = TOKEN.exec(text);
+      if (!m) {
+        if (text[start] === '"') break; // an unfinished "text": the rest is inside it
+        TOKEN.lastIndex = start + 1;
+        continue;
+      }
+      const kind = KINDS[m.findIndex((g, i) => i > 0 && g !== undefined)];
+      if (kind !== "ws") tokens.push({ kind, text: m[0] });
+    }
+    const out = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].kind !== "ref") continue;
+      const a = parseRef(tokens[i].text);
+      let b = a;
+      if (tokens[i + 1] && tokens[i + 1].text === ":" && tokens[i + 2] && tokens[i + 2].kind === "ref") { b = parseRef(tokens[i + 2].text); i += 2; }
+      out.push({ c1: Math.min(a.col, b.col), r1: Math.min(a.row, b.row), c2: Math.max(a.col, b.col), r2: Math.max(a.row, b.row) });
+    }
+    return out;
+  }
+
   // ───────────── parser (AST like formula.py: ["num", x], ["ref", col, row0], ["range", c1, r1, c2, r2] …) ─────────────
   function parse(formula) {
     const text = formula.startsWith("=") ? formula.slice(1) : formula;
@@ -149,12 +177,23 @@
   }
 
   // ───────────── values ─────────────
-  const NUMERIC = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
-  const THOUSANDS = /^[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?$/;
+  const NUMERIC = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+  const THOUSANDS = /^\d{1,3}(?:,\d{3})+(?:\.\d*)?$/;
+  // "50", "-7.5", "1,600.00", "1e3" – and, as Excel reads a typed value, "$20", "-$1,234.50", "20%" (= number_from_text)
   function numberFromText(text) {
     let s = String(text).trim();
+    const percent = s.endsWith("%");
+    if (percent) s = s.slice(0, -1);
+    let sign = "";
+    if (s[0] === "+" || s[0] === "-") { sign = s[0]; s = s.slice(1); }
+    if (s[0] === "$" && !percent) {
+      s = s.slice(1);
+      if (!sign && (s[0] === "+" || s[0] === "-")) { sign = s[0]; s = s.slice(1); }
+    }
     if (THOUSANDS.test(s)) s = s.replace(/,/g, "");
-    return NUMERIC.test(s) ? Number(s) : null;
+    if (!NUMERIC.test(s)) return null;
+    const n = Number(sign + s);
+    return percent ? n / 100 : n;
   }
   function toNumber(v) {
     if (isError(v)) return v;
@@ -525,7 +564,7 @@
   }
 
   return {
-    FormulaError, ERRORS, isError, parse, tokenize, evaluate, SheetEvaluator,
+    FormulaError, ERRORS, isError, parse, tokenize, references, evaluate, SheetEvaluator,
     formatNumber, formatValue, toNumber, numberFromText, colLetter, colIndex,
     deleteRows, insertRows, shiftFormula, FUNCTION_NAMES,
   };

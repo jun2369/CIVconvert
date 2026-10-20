@@ -223,17 +223,29 @@ def parse(formula: str):
 
 # ───────────────────────────── values ─────────────────────────────
 
-_NUMERIC = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
-_THOUSANDS = re.compile(r"[+-]?\d{1,3}(?:,\d{3})+(?:\.\d*)?")
+_NUMERIC = re.compile(r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
+_THOUSANDS = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d*)?")
 
 
 def number_from_text(text: str) -> float | None:
+    """'50', '-7.5', '1,600.00', '1e3' – and, as Excel reads a typed value, '$20', '-$1,234.50', '20%'."""
     s = text.strip()
+    percent = s.endswith("%")
+    if percent:
+        s = s[:-1]
+    sign = ""
+    if s[:1] in ("+", "-"):
+        sign, s = s[0], s[1:]
+    if s[:1] == "$" and not percent:
+        s = s[1:]
+        if not sign and s[:1] in ("+", "-"):
+            sign, s = s[0], s[1:]
     if _THOUSANDS.fullmatch(s):
         s = s.replace(",", "")
-    if _NUMERIC.fullmatch(s):
-        return float(s)
-    return None
+    if not _NUMERIC.fullmatch(s):
+        return None
+    n = float(sign + s)
+    return n / 100 if percent else n
 
 
 def to_number(value: Any) -> float | FormulaError:

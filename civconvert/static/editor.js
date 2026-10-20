@@ -88,6 +88,7 @@
         onChange: changed,
         onSelect: selectedCell,
         onEditInput: (text) => { $("#formula").value = text; },
+        formulaBar: $("#formula"),
         onContextMenu: contextMenu,
         onReadOnly: () => toast(t("ed.readonly")),
       });

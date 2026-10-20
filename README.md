@@ -67,10 +67,16 @@
 - Ctrl+C / Ctrl+X / Ctrl+V：可以和 Excel 互相复制粘贴；表格内复制公式，引用会像 Excel 一样自动调整
 - Delete 清空所选；工具栏或右键菜单：插入行、删除整行（LNO 自动重新编号，公式引用自动调整）
 - Ctrl+Z / Ctrl+Y 撤销 / 重做；Ctrl+S 保存
-- 公式：`=SUM(G2:G9)`、`=ROUND(G2*H2,2)`、`=IF(F2="","缺 HS",F2)` 等，支持
+- 公式：`=I2*J2`、`=G2+H2-K2`、`=SUM(G2:G9)`、`=ROUND(G2*H2,2)`、`=IF(F2="","缺 HS",F2)` 等，
+  运算符 `+ - * / ^ % &` 和比较，支持
   SUM AVERAGE MIN MAX COUNT COUNTA PRODUCT ROUND ROUNDUP ROUNDDOWN INT ABS MOD POWER SQRT
   IF IFERROR AND OR NOT CONCAT CONCATENATE LEFT RIGHT MID LEN UPPER LOWER TRIM VALUE。
-  公式和计算结果都会保存；导出 CSV 时写入计算结果。看起来是数字的文字（如 "50"、"1,600.00"）参与计算
+  公式和计算结果都会保存；导出 CSV 时写入计算结果。看起来是数字的文字参与计算：
+  "50"、"1,600.00"，以及和 Excel 一样的 "$20"（= 20）、"-$1,234.50"、"20%"（= 0.2）
+- 像 Excel 一样点选单元格：输入 `=`、运算符、`(` 或 `,` 之后，点一下单元格就填入它的地址；
+  拖动 = 区域（`G2:G9`），Shift+点击 = 扩展成区域，紧接着再点别的格子 = 替换刚填入的地址；
+  直接打字输入公式时方向键也可以点选（Shift+方向键扩展）。在上方 fx 公式栏输入时同样可以点选。
+  正在输入的公式引用到的单元格会用彩色框标出
 - 问题标记：红色 = 错误（必填列为空、公式错误、PDF 里数量×单价≠金额），黄色 = 警告（HS Code 格式、
   同一 Model 的 HS Code 不一致）；工具栏 ‹ › 逐个跳转；单元格右上角蓝色三角 = 与转换结果不同（被修改过）
 - 底部状态栏：所选单元格的求和 / 平均、当前行在 PDF 中的原始内容

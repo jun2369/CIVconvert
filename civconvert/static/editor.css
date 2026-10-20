@@ -74,6 +74,14 @@ body.editor { display: flex; flex-direction: column; overflow: hidden; }
 .sh-sel { position: absolute; background: rgba(29, 88, 214, .1); border: 1px solid rgba(29, 88, 214, .55); box-sizing: border-box; }
 .sh-act { position: absolute; border: 2px solid #1d58d6; box-sizing: border-box; }
 .sh-ants { position: absolute; border: 2px dashed #1d58d6; box-sizing: border-box; animation: ants 1s linear infinite; }
+/* the cells the formula being typed refers to (like Excel's coloured references) */
+.sh-ref { position: absolute; box-sizing: border-box; border: 2px solid; }
+.sh-ref.k0 { border-color: #1d58d6; background: rgba(29, 88, 214, .08); }
+.sh-ref.k1 { border-color: #d03b3b; background: rgba(208, 59, 59, .08); }
+.sh-ref.k2 { border-color: #7a3fd1; background: rgba(122, 63, 209, .08); }
+.sh-ref.k3 { border-color: #12875a; background: rgba(18, 135, 90, .08); }
+.sh-ref.k4 { border-color: #c26a00; background: rgba(194, 106, 0, .08); }
+.sh-ref.k5 { border-color: #c2307a; background: rgba(194, 48, 122, .08); }
 @keyframes ants { 50% { border-color: #8fb0f0; } }
 .sh-input { position: absolute; z-index: 5; height: 24px; margin: 0; padding: 0 5px; box-sizing: border-box; border: 0; resize: none; overflow: hidden;
             font: 10pt Arial, "Microsoft YaHei", sans-serif; line-height: 23px; white-space: pre; background: transparent; color: transparent; caret-color: transparent;
