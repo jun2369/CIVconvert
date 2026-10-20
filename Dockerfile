@@ -17,4 +17,5 @@ RUN useradd --uid 10001 --no-create-home app
 USER app
 
 EXPOSE 8080
-CMD ["sh", "-c", "exec uvicorn civconvert.api:app --host 0.0.0.0 --port ${PORT}"]
+# --proxy-headers: behind the platform's load balancer, see the real client IP and https
+CMD ["sh", "-c", "exec uvicorn civconvert.api:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]

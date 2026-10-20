@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
@@ -70,3 +71,43 @@ def load_template(profile: TemplateProfile) -> Template:
     if not headers:
         raise ConfigError(f"template '{profile.id}': row {profile.header_row} of {profile.workbook.name} is empty")
     return Template(profile, headers)
+
+
+# ───── how a workbook shows cells (the preview and the online sheet look like the exported Excel) ─────
+
+
+def shown_value(value: Any) -> str:
+    """A cell value the way Excel shows it with the General number format."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float):
+        return format(value, ".11g")
+    return str(value)
+
+
+def _rgb(color) -> str | None:
+    if color is None or color.type != "rgb" or not isinstance(color.rgb, str):
+        return None  # theme / indexed colors: leave it to the default
+    return "#" + color.rgb[-6:]
+
+
+def cell_style(cell) -> dict[str, Any]:
+    font, fill = cell.font, cell.fill
+    style: dict[str, Any] = {"font": font.name or "Arial", "size": float(font.sz or 10), "bold": bool(font.b)}
+    if color := _rgb(font.color):
+        style["color"] = color
+    if fill is not None and fill.fill_type == "solid" and (bg := _rgb(fill.fgColor)):
+        style["fill"] = bg
+    return style
+
+
+def column_width_px(ws, col: int) -> int:
+    """Column width in screen pixels (Excel: characters of the default font, ~7 px each + 5 px padding)."""
+    width = ws.sheet_format.defaultColWidth or 8.43
+    for dim in ws.column_dimensions.values():
+        if dim.min and dim.max and dim.min <= col <= dim.max and dim.width:
+            width = dim.width
+            break
+    return int(width * 7 + 5)

@@ -4,6 +4,7 @@
   customers          list the configured customers
   check-config       validate every customer profile against its template
   serve              start the web page / API locally
+  migrate            create / update the database tables (the server also does this on start)
 """
 
 from __future__ import annotations
@@ -100,6 +101,14 @@ def cmd_check_config(_: argparse.Namespace) -> int:
     return 1 if bad or not profiles else 0
 
 
+def cmd_migrate(_: argparse.Namespace) -> int:
+    from .db import engine, migrate
+
+    migrate()
+    print(f"database schema is up to date: {engine().url.render_as_string(hide_password=True)}")
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -136,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("customers", help="list configured customers").set_defaults(func=cmd_customers)
     sub.add_parser("check-config", help="validate customer profiles and templates").set_defaults(func=cmd_check_config)
+    sub.add_parser("migrate", help="create / update the database tables").set_defaults(func=cmd_migrate)
 
     s = sub.add_parser("serve", help="run the web page / API")
     s.add_argument("--host", default="127.0.0.1")

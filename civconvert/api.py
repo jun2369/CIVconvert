@@ -1,33 +1,36 @@
-"""HTTP API and upload page.
+"""HTTP API and web pages.
 
     local:      python -m civconvert serve
     container:  uvicorn civconvert.api:app --host 0.0.0.0 --port 8080
 
-Set API_KEY (several keys: comma-separated) to require an X-API-Key header.
+Pages (login with the Nimbus account): /login, / (dashboard), /documents/{id} (online sheet).
+The schema of the database (DATABASE_URL) is migrated on start.
 
-    POST /api/convert        multipart upload (web page, curl) -> CSV file, or JSON with format=json
+Conversion API – a logged-in user, or X-API-Key = one of API_KEY (comma-separated):
+    POST /api/convert        multipart upload -> CSV file, or JSON with format=json
     POST /api/convert/json   base64 JSON in/out, accepts Outlook attachments as-is (Power Automate)
     POST /api/preview        the PDF(s) of one invoice -> result + page images for the review page
+Documents API: see documents_api.py.  Login: see auth.py.
 """
 
 import base64
 import binascii
-import hmac
 import io
 import logging
-import os
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
-from . import __version__, preview
+from . import __version__, auth, db, documents, documents_api, preview, settings
 from .pipeline import ConversionError, Failure, InputFile, Result, convert, convert_many
 from .profiles import ConfigError, load_customers
 
@@ -42,7 +45,24 @@ if not log.handlers:
     log.addHandler(_handler)
     log.setLevel(logging.INFO)
 
-app = FastAPI(title="CIVconvert", version=__version__, description="Commercial Invoice PDF -> CargoWise CSV")
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await run_in_threadpool(db.migrate)
+    with db.session_scope() as session:
+        if n := documents.expire_stuck(session):
+            log.warning("%d document(s) were left 'processing' by a restart and are now 'failed'", n)
+    if not auth.api_keys():
+        log.info("API_KEY is not set: the conversion API is only open to logged-in users")
+    if settings.dev_login_enabled():
+        log.warning("AUTH_DEV_LOGIN is on: anyone can log in with just an e-mail address (development only)")
+    yield
+
+
+app = FastAPI(title="CIVconvert", version=__version__, description="Commercial Invoice PDF -> CargoWise CSV", lifespan=lifespan)
+app.include_router(auth.router)
+app.include_router(documents_api.router)
 NO_CACHE = {"Cache-Control": "no-cache"}  # revalidate the page and its scripts, so an update is never half-loaded
 
 
@@ -56,18 +76,18 @@ class _Static(StaticFiles):
 app.mount("/static", _Static(directory=STATIC_DIR), name="static")
 
 
-def _api_keys() -> list[str]:
-    return [k.strip() for k in os.environ.get("API_KEY", "").split(",") if k.strip()]
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    return response
 
 
-if not _api_keys():
-    log.warning("API_KEY is not set - anyone who can reach this server can use it (fine for local use only)")
-
-
-def require_api_key(x_api_key: Annotated[str | None, Header()] = None) -> None:
-    keys = _api_keys()
-    if keys and not (x_api_key and any(hmac.compare_digest(x_api_key.encode(), k.encode()) for k in keys)):
-        raise HTTPException(status_code=401, detail="Missing or invalid X-API-Key header")
+@app.exception_handler(documents.DocumentError)
+async def _document_error(_: Request, exc: documents.DocumentError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status, content={"status": "error", "error": exc.message, **exc.extra})
 
 
 @app.exception_handler(ConversionError)
@@ -113,9 +133,42 @@ def _attachment(filename: str) -> dict[str, str]:
     return {"Content-Disposition": f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename)}"}
 
 
+Db = Annotated[Session, Depends(db.get_db)]
+
+
+def _page(name: str) -> FileResponse:
+    return FileResponse(STATIC_DIR / name, headers=NO_CACHE)
+
+
+def _safe_next(target: str | None) -> str:
+    """Only paths on this site (no //other.host, no backslashes)."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return "/"
+
+
+def _to_login(request: Request) -> RedirectResponse:
+    here = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(f"/login?next={quote(here, safe='/')}", status_code=303)
+
+
 @app.get("/", include_in_schema=False)
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html", headers=NO_CACHE)
+def index(request: Request, session: Db) -> Response:
+    """The dashboard: upload, counts and the document list."""
+    return _page("index.html") if auth.session_user(request, session) else _to_login(request)
+
+
+@app.get("/documents/{doc_id}", include_in_schema=False)
+def document_page(doc_id: str, request: Request, session: Db) -> Response:
+    """The online sheet of one document."""
+    return _page("editor.html") if auth.session_user(request, session) else _to_login(request)
+
+
+@app.get("/login", include_in_schema=False)
+def login_page(request: Request, session: Db, next: str | None = None) -> Response:
+    if auth.session_user(request, session):
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return _page("login.html")
 
 
 @app.get("/healthz")
@@ -125,15 +178,15 @@ def healthz() -> dict[str, str]:
 
 @app.get("/api/info")
 def info() -> dict[str, Any]:
-    return {"version": __version__, "auth_required": bool(_api_keys())}
+    return {"version": __version__, "auth_required": True, "login": auth.auth_config()}
 
 
-@app.get("/api/customers", dependencies=[Depends(require_api_key)])
+@app.get("/api/customers", dependencies=[Depends(auth.require_api_access)])
 def customers() -> list[dict[str, str]]:
     return [{"id": p.id, "name": p.name, "template": p.template, "multi_file": p.multi_file} for p in load_customers().values()]
 
 
-@app.post("/api/convert", dependencies=[Depends(require_api_key)])
+@app.post("/api/convert", dependencies=[Depends(auth.require_api_access)])
 async def convert_upload(
     files: Annotated[list[UploadFile], File(description="Commercial Invoice PDF(s)")],
     customer: Annotated[str | None, Form()] = None,
@@ -163,7 +216,7 @@ async def convert_upload(
     return Response(buf.getvalue(), media_type="application/zip", headers=_attachment("CargoWise Input.zip"))
 
 
-@app.post("/api/preview", dependencies=[Depends(require_api_key)])
+@app.post("/api/preview", dependencies=[Depends(auth.require_api_access)])
 async def preview_upload(
     files: Annotated[list[UploadFile], File(description="the PDF(s) of ONE invoice")],
     customer: Annotated[str | None, Form()] = None,
@@ -196,7 +249,7 @@ class ConvertIn(BaseModel):
     include_xlsx: bool = False
 
 
-@app.post("/api/convert/json", dependencies=[Depends(require_api_key)])
+@app.post("/api/convert/json", dependencies=[Depends(auth.require_api_access)])
 def convert_json(body: ConvertIn) -> dict[str, Any]:
     """Power Automate friendly: pass the Outlook trigger's attachments array as `files`.
 

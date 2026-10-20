@@ -8,9 +8,15 @@ from conftest import SAMPLE, needs_sample
 client = TestClient(app)
 
 
-def test_health_and_customers():
+def test_health_and_customers(api_key):
     assert client.get("/healthz").json()["status"] == "ok"
-    assert any(c["id"] == "istone" for c in client.get("/api/customers").json())
+    assert any(c["id"] == "istone" for c in client.get("/api/customers", headers=api_key).json())
+
+
+def test_conversion_api_is_not_anonymous(monkeypatch):
+    monkeypatch.delenv("API_KEY", raising=False)
+    assert client.get("/api/customers").status_code == 401
+    assert client.post("/api/convert", files={"files": ("x.pdf", b"%PDF-1.4", "application/pdf")}).status_code == 401
 
 
 def test_api_key_is_enforced_when_set(monkeypatch):
@@ -21,14 +27,14 @@ def test_api_key_is_enforced_when_set(monkeypatch):
     assert client.get("/api/customers", headers={"X-API-Key": "secret-2"}).status_code == 200
 
 
-def test_not_a_pdf_is_a_clear_error():
-    r = client.post("/api/convert", files={"files": ("x.pdf", b"hello", "application/pdf")})
+def test_not_a_pdf_is_a_clear_error(api_key):
+    r = client.post("/api/convert", files={"files": ("x.pdf", b"hello", "application/pdf")}, headers=api_key)
     assert r.status_code == 422 and "not a PDF" in r.json()["error"]
 
 
 @needs_sample
-def test_upload_returns_csv_file():
-    r = client.post("/api/convert", files={"files": (SAMPLE.name, SAMPLE.read_bytes(), "application/pdf")})
+def test_upload_returns_csv_file(api_key):
+    r = client.post("/api/convert", files={"files": (SAMPLE.name, SAMPLE.read_bytes(), "application/pdf")}, headers=api_key)
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "CargoWise Input - 8100800394 Commercial Invoice.csv" in r.headers["content-disposition"]
@@ -36,7 +42,7 @@ def test_upload_returns_csv_file():
 
 
 @needs_sample
-def test_power_automate_json_with_outlook_attachments():
+def test_power_automate_json_with_outlook_attachments(api_key):
     body = {
         "sender": "pako@example.com",
         "files": [  # shape of the Outlook trigger's attachments array
@@ -45,7 +51,7 @@ def test_power_automate_json_with_outlook_attachments():
             {"name": "logo.png", "contentBytes": base64.b64encode(b"\x89PNG\r\n").decode(), "isInline": True},
         ],
     }
-    data = client.post("/api/convert/json", json=body).json()
+    data = client.post("/api/convert/json", json=body, headers=api_key).json()
     assert data["status"] == "ok" and data["skipped"] == ["logo.png"]
     [result] = data["results"]
     assert result["filename"] == "CargoWise Input - 8100800394 Commercial Invoice.csv"

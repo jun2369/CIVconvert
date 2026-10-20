@@ -1,6 +1,7 @@
 /* Review before export: the invoice table (PDF page image) next to the filled template columns (Excel).
-   index.html calls  CIVPreview.open({ title, load, download, returnFocus })  where load() resolves to
-   the JSON of POST /api/preview: { result, preview }. */
+   CIVPreview.open({ title, load, returnFocus, download | actions })  where load() resolves to
+   { result, preview } (POST /api/preview, or GET /api/documents/{id}/preview for a saved document).
+   download(base64, filename, type) saves the result's files; actions(result) returns footer buttons instead. */
 (() => {
   "use strict";
   const PT = 96 / 72; // CSS px per PDF point at 100 %
@@ -698,6 +699,11 @@
 
   function footer() {
     const r = S.result, download = S.opts.download;
+    if (S.opts.actions) { // a saved document: the caller's buttons (export through the documents API)
+      const open = S.issueLines.length;
+      S.actions.replaceChildren(el("span", { class: "hint", text: open ? `还有 ${open} 行需复核` : "已对照：可以导出" }), ...S.opts.actions(r));
+      return;
+    }
     const csv = el("button", { type: "button", class: "primary", text: "下载 CSV" });
     csv.onclick = () => download(r.content_base64, r.filename, "text/csv");
     const xlsx = el("button", { type: "button", class: "secondary", text: "下载 Excel" });

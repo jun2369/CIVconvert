@@ -6,9 +6,11 @@ call :setup || goto :failed
 goto :eof
 
 :setup
-if exist ".venv\Scripts\python.exe" exit /b 0
-echo First run: installing Python packages ...
-python -m venv .venv || exit /b 1
+if not exist ".venv\Scripts\python.exe" (
+  echo First run: installing Python packages ...
+  python -m venv .venv || exit /b 1
+)
+rem also picks up packages added by an update (quick when nothing is missing)
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt || exit /b 1
 exit /b 0
 

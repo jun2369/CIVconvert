@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · CIVconvert</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  body { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+  .card { width: min(400px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px 26px 22px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, .06); }
+  .card h1 { font-size: 22px; }
+  .card .sub { margin-bottom: 20px; }
+  form { display: grid; gap: 14px; }
+  .pw { position: relative; }
+  .pw input { width: 100%; padding-right: 64px; }
+  .pw button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); }
+  input[type=email], input[type=password], input[type=text] { width: 100%; }
+  .btn.primary { width: 100%; padding: 10px; font-size: 15px; }
+  .dev { margin-top: 18px; padding-top: 14px; border-top: 1px dashed var(--line); }
+  .dev summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .dev form { margin-top: 10px; }
+  .foot { margin-top: 18px; text-align: center; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>CIVconvert</h1>
+  <p class="sub">Commercial Invoice → CargoWise · 使用公司 Nimbus 账户登录</p>
+  <div id="error"></div>
+  <form id="login" novalidate>
+    <label class="field">Nimbus 邮箱
+      <input type="email" id="email" autocomplete="username" placeholder="you@agslogistics.com" required>
+    </label>
+    <label class="field">密码
+      <span class="pw"><input type="password" id="password" autocomplete="current-password" required>
+        <button type="button" class="btn small ghost" id="show" aria-label="显示密码">显示</button></span>
+    </label>
+    <button type="submit" class="btn primary" id="go">登录</button>
+  </form>
+  <details class="dev" id="devBox" hidden>
+    <summary>开发环境登录（AUTH_DEV_LOGIN 已开启，生产环境不可用）</summary>
+    <form id="devForm">
+      <label class="field">邮箱 <input type="email" id="devEmail" placeholder="test.op@agslogistics.com"></label>
+      <label class="field">姓名（可选） <input type="text" id="devName"></label>
+      <button type="submit" class="btn">开发登录</button>
+    </form>
+  </details>
+  <p class="foot hint" id="note">密码只用于向 Nimbus 验证身份，本系统不保存密码。</p>
+</main>
+<script src="/static/app.js"></script>
+<script>
+(() => {
+  const { $, el, api } = CIV;
+  const next = (() => {
+    const n = new URLSearchParams(location.search).get("next") || "/";
+    return n.startsWith("/") && !n.startsWith("//") && !n.includes("\\") ? n : "/";
+  })();
+  const showError = (text) => $("#error").replaceChildren(text ? el("div", { class: "msg err", text }) : "");
+
+  async function submit(path, body, button) {
+    showError("");
+    button.disabled = true;
+    const label = button.textContent;
+    button.replaceChildren(el("span", { class: "spin" }), " 正在登录…");
+    try {
+      await api(path, { method: "POST", json: body, quiet401: true });
+      location.replace(next);
+    } catch (e) {
+      showError(e.message);
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+
+  $("#login").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const email = $("#email").value.trim(), password = $("#password").value;
+    if (!email || !password) { showError("请输入邮箱和密码"); return; }
+    try { localStorage.setItem("civconvert.email", email); } catch { /* private mode */ }
+    submit("/api/auth/login", { email, password }, $("#go"));
+  });
+  $("#show").onclick = () => {
+    const pw = $("#password");
+    pw.type = pw.type === "password" ? "text" : "password";
+    $("#show").textContent = pw.type === "password" ? "显示" : "隐藏";
+  };
+  $("#devForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submit("/api/auth/dev-login", { email: $("#devEmail").value.trim(), name: $("#devName").value.trim() || null }, e.submitter);
+  });
+
+  try { $("#email").value = localStorage.getItem("civconvert.email") || ""; } catch { /* private mode */ }
+  ($("#email").value ? $("#password") : $("#email")).focus();
+  api("/api/auth/config").then((cfg) => {
+    $("#devBox").hidden = !cfg.dev_login;
+    if (!cfg.nimbus) {
+      $("#login").hidden = true;
+      $("#note").textContent = "Nimbus 登录没有配置（NIMBUS_API_URL）。";
+    }
+  }).catch((e) => showError(e.message));
+})();
+</script>
+</body>
+</html>

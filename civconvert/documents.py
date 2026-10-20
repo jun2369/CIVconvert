@@ -1,0 +1,543 @@
+"""Documents: one uploaded invoice (one or several PDF parts) -> conversion -> editable sheet -> CSV.
+
+    status:  processing -> editing -> confirmed      (confirmed -> editing: reopened for changes)
+             processing -> failed  -> processing     (converted again)
+
+The original PDFs, what was read from them, the sheet, its versions, the exports and the audit
+log all hang off documents.id.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import logging
+import re
+from dataclasses import asdict
+from datetime import datetime, timedelta
+from typing import Any
+
+from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy.orm import Session, selectinload
+
+from . import __version__, extract, jobs, preview, storage
+from . import sheet as sheets
+from .db import as_utc, iso, session_scope, utcnow
+from .models import (
+    CONFIRMED,
+    EDITING,
+    FAILED,
+    PROCESSING,
+    STATUSES,
+    AuditLog,
+    Document,
+    DocumentExport,
+    DocumentExtraction,
+    DocumentFile,
+    DocumentSheet,
+    SheetVersion,
+    User,
+)
+from .pipeline import ConversionError, InputFile, Result, convert, resolve_customer
+from .profiles import ConfigError, CustomerProfile, load_customers, load_template_profile
+from .template import Template, load_template
+
+log = logging.getLogger("civconvert")
+
+MAX_FILES = 20
+MAX_FILE_MB = 25
+VERSION_EVERY = timedelta(minutes=10)  # autosaves keep a snapshot at most this often
+LOG_MERGE = timedelta(minutes=10)  # autosaves by the same user within this time are one log entry
+STUCK_AFTER = timedelta(minutes=10)  # a conversion never takes this long: the server was restarted
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+class DocumentError(Exception):
+    def __init__(self, status: int, message: str, extra: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.status, self.message, self.extra = status, message, extra or {}
+
+
+def audit(db: Session, action: str, user_id: int | None, document: Document | None = None, **detail: Any) -> None:
+    db.add(AuditLog(document_id=document.id if document else None, user_id=user_id, action=action, detail=detail, created_at=utcnow()))
+
+
+def _stem(name: str) -> str:
+    base = re.split(r"[\\/]", name)[-1]
+    return re.sub(r"\.pdf$", "", base, flags=re.IGNORECASE)[:255] or "invoice"
+
+
+# ───────────────────────────── upload & conversion ─────────────────────────────
+
+
+def check_upload(files: list[InputFile]) -> None:
+    if not files:
+        raise DocumentError(422, "没有上传文件")
+    if len(files) > MAX_FILES:
+        raise DocumentError(422, f"一次最多上传 {MAX_FILES} 个文件")
+    for f in files:
+        if len(f.data) > MAX_FILE_MB * 1024 * 1024:
+            raise DocumentError(422, f"{f.name}：文件大于 {MAX_FILE_MB} MB")
+        if b"%PDF" not in f.data[:1024]:
+            raise DocumentError(422, f"{f.name}：不是 PDF 文件")
+
+
+def _groups(files: list[InputFile], customer: str | None, merge: bool | None) -> list[list[InputFile]]:
+    """One document per PDF, or one document for all of them (parts of one invoice)."""
+    if len(files) == 1:
+        return [files]
+    if merge is None:  # the customer's profile decides (output.multi_file)
+        try:
+            text = extract.read_text(files[0].data, files[0].name)
+            merge = resolve_customer(load_customers(), customer, None, text).multi_file == "merge"
+        except (extract.PdfError, ConversionError, ConfigError):
+            merge = False
+    return [files] if merge else [[f] for f in files]
+
+
+def create_documents(db: Session, user: User, files: list[InputFile], customer: str | None, merge: bool | None) -> list[Document]:
+    check_upload(files)
+    docs = []
+    for group in _groups(files, customer, merge):
+        now = utcnow()
+        name = _stem(group[0].name) + (f" (+{len(group) - 1})" if len(group) > 1 else "")
+        doc = Document(
+            name=name[:255], status=PROCESSING, options={"customer": customer, "merge": len(group) > 1},
+            created_by=user.id, created_at=now, updated_by=user.id, updated_at=now,
+        )
+        db.add(doc)
+        db.flush()
+        for i, f in enumerate(group):
+            row = DocumentFile(document_id=doc.id, position=i, filename=f.name[:255], content_type="application/pdf", created_at=now)
+            storage.put(row, f.data)
+            db.add(row)
+        audit(db, "document.created", user.id, doc, files=[f.name for f in group], customer=customer)
+        docs.append(doc)
+    db.commit()
+    for doc in docs:
+        jobs.submit(process, doc.id)
+    return docs
+
+
+def extraction_data(result: Result) -> dict[str, Any]:
+    """What was read from the PDF – kept so the document can be checked and previewed later."""
+    geo = preview.geometry(result)
+    fields = list(result.customer.table.columns)
+    labels = next((p["labels"] for p in geo if p["labels"]), {})
+    return {
+        "customer": {"id": result.customer.id, "name": result.customer.name},
+        "template": result.template.id,
+        "document": result.document,
+        "csv_filename": result.filename,
+        "sources": result.sources,
+        "checks": [asdict(c) for c in result.checks],
+        "warnings": result.warnings,
+        "flags": [asdict(f) for f in result.flags],
+        "fields": [{"name": f, "label": labels.get(f) or f} for f in fields],
+        "items": [{f: item.get(f, "") for f in fields} for item in result.items],
+        "converted": [{c.letter: row[c.index] for c in result.columns} for row in result.rows],
+        "geometry": geo,
+    }
+
+
+def process(doc_id: str) -> None:
+    """Background job: convert the stored PDF(s) of a document."""
+    with session_scope() as db:
+        doc = db.get(Document, doc_id)
+        if doc is None or doc.status != PROCESSING:
+            return
+        try:
+            files = [InputFile(f.filename, storage.get(f)) for f in doc.files]
+            result = convert(files, (doc.options or {}).get("customer") or None)
+        except (ConversionError, ConfigError, storage.StorageError) as e:
+            _fail(db, doc, str(e))
+            return
+        except Exception as e:  # never leave a document "processing"
+            log.exception("converting document %s failed", doc_id)
+            _fail(db, doc, f"内部错误 {e.__class__.__name__}: {e}")
+            return
+        _store(db, doc, result)
+        log.info("document %s converted: %s, %d lines", doc.id, result.customer.id, len(result.rows))
+
+
+def _fail(db: Session, doc: Document, message: str) -> None:
+    doc.status, doc.error, doc.updated_at = FAILED, message[:2000], utcnow()
+    audit(db, "conversion.failed", doc.created_by, doc, error=message[:500])
+
+
+def _store(db: Session, doc: Document, result: Result) -> None:
+    template = result.template
+    extraction = extraction_data(result)
+    rows = sheets.rows_from_result(result)
+    sheets.compute(rows, template)
+    flags = sheets.validate(rows, template, result.customer, result.columns, extraction)
+    now = utcnow()
+    for model in (DocumentExtraction, DocumentSheet):  # an earlier attempt
+        old = db.get(model, doc.id)
+        if old is not None:
+            db.delete(old)
+    db.flush()
+    db.add(DocumentExtraction(document_id=doc.id, data=extraction, engine_version=__version__, created_at=now))
+    db.add(DocumentSheet(document_id=doc.id, revision=1, rows=rows, flags=flags, updated_by=doc.created_by, updated_at=now))
+    db.add(SheetVersion(document_id=doc.id, revision=1, rows=rows, reason="initial", created_by=doc.created_by, created_at=now))
+    doc.status, doc.error = EDITING, None
+    doc.customer_id, doc.template_id = result.customer.id, template.id
+    doc.invoice_no = (result.document.get("invoice_no") or None) and result.document["invoice_no"][:100]
+    doc.invoice_date = (result.document.get("invoice_date") or None) and result.document["invoice_date"][:40]
+    doc.line_count = len(rows)
+    doc.needs_review = sheets.needs_review(flags, extraction)
+    doc.updated_at = now
+    audit(db, "conversion.succeeded", doc.created_by, doc, lines=len(rows), customer=result.customer.id, warnings=len(result.warnings))
+
+
+def expire_stuck(db: Session) -> int:
+    """Documents left 'processing' by a restarted server become 'failed' (they can be converted again)."""
+    res = db.execute(
+        update(Document)
+        .where(Document.status == PROCESSING, Document.updated_at < utcnow() - STUCK_AFTER)
+        .values(status=FAILED, error="处理被中断（服务重启），请点'重新转换'", updated_at=utcnow())
+    )
+    db.commit()
+    return res.rowcount or 0
+
+
+def retry(db: Session, doc: Document, user: User, customer: str | None) -> Document:
+    if doc.status != FAILED:
+        raise DocumentError(409, "只有处理失败的文档可以重新转换")
+    doc.status, doc.error, doc.updated_at, doc.updated_by = PROCESSING, None, utcnow(), user.id
+    doc.options = {**(doc.options or {}), "customer": customer}
+    audit(db, "conversion.retried", user.id, doc, customer=customer)
+    db.commit()
+    jobs.submit(process, doc.id)
+    return doc
+
+
+# ───────────────────────────── the sheet ─────────────────────────────
+
+
+def get_document(db: Session, doc_id: str) -> Document:
+    doc = db.get(Document, doc_id)
+    if doc is None:
+        raise DocumentError(404, "文档不存在")
+    return doc
+
+
+def _template(doc: Document) -> Template:
+    try:
+        return load_template(load_template_profile(doc.template_id or ""))
+    except ConfigError as e:
+        raise DocumentError(500, f"模板 '{doc.template_id}' 无法读取：{e}") from e
+
+
+def _profile(doc: Document, template: Template) -> tuple[CustomerProfile | None, list]:
+    """The customer's profile and its mapped columns (None if the profile was removed since)."""
+    try:
+        profile = load_customers().get(doc.customer_id or "")
+        return (profile, sheets.mapped_columns(profile, template)) if profile else (None, [])
+    except ConfigError:
+        return None, []
+
+
+def _extraction(db: Session, doc: Document) -> dict[str, Any]:
+    ex = db.get(DocumentExtraction, doc.id)
+    return ex.data if ex else {}
+
+
+def _sheet(db: Session, doc: Document, lock: bool = False) -> DocumentSheet:
+    query = select(DocumentSheet).where(DocumentSheet.document_id == doc.id)
+    sh = db.scalar(query.with_for_update() if lock else query)
+    if sh is None:
+        raise DocumentError(409, "这份文档还没有表格数据")
+    return sh
+
+
+def save_sheet(db: Session, doc: Document, user: User, rows_in: Any, revision: int | None, reason: str = "auto", force: bool = False) -> dict[str, Any]:
+    if doc.status == CONFIRMED:
+        raise DocumentError(409, "文档已确认（只读）。需要修改请先点'重新编辑'", {"status": doc.status})
+    if doc.status != EDITING:
+        raise DocumentError(409, "文档当前不能编辑", {"status": doc.status})
+    sh = _sheet(db, doc, lock=True)  # one save at a time per document
+    if not force and revision != sh.revision:
+        who = db.get(User, sh.updated_by) if sh.updated_by else None
+        raise DocumentError(409, "这份文档已在别处被修改", {
+            "conflict": True, "revision": sh.revision, "updated_by": who.name if who else None, "updated_at": iso(sh.updated_at),
+        })
+    template = _template(doc)
+    try:
+        rows = sheets.clean_rows(rows_in, len(template.headers))
+    except sheets.SheetError as e:
+        raise DocumentError(400, f"表格数据无效：{e}") from e
+    sheets.compute(rows, template)
+    change = sheets.diff(sh.rows or [], rows)
+    if rows == sh.rows:  # nothing changed (e.g. Save pressed twice)
+        return _saved(doc, sh)
+    profile, mapped = _profile(doc, template)
+    extraction = _extraction(db, doc)
+    flags = sheets.validate(rows, template, profile, mapped, extraction)
+    now = utcnow()
+    sh.rows, sh.flags, sh.revision, sh.updated_by, sh.updated_at = rows, flags, sh.revision + 1, user.id, now
+    doc.updated_at, doc.updated_by, doc.line_count = now, user.id, len(rows)
+    doc.needs_review = sheets.needs_review(flags, extraction)
+    last = db.scalar(select(func.max(SheetVersion.created_at)).where(SheetVersion.document_id == doc.id))
+    if reason == "manual" or last is None or now - as_utc(last) >= VERSION_EVERY:
+        db.add(SheetVersion(document_id=doc.id, revision=sh.revision, rows=rows, reason=reason, created_by=user.id, created_at=now))
+    _log_save(db, doc, user, reason, change, sh.revision, now)
+    db.commit()
+    return _saved(doc, sh)
+
+
+def _saved(doc: Document, sh: DocumentSheet) -> dict[str, Any]:
+    return {
+        "revision": sh.revision, "saved_at": iso(sh.updated_at), "rows": sh.rows, "flags": sh.flags,
+        "needs_review": doc.needs_review, "line_count": len(sh.rows or []),
+    }
+
+
+def _log_save(db: Session, doc: Document, user: User, reason: str, change: dict[str, int], revision: int, now: datetime) -> None:
+    last = db.scalar(select(AuditLog).where(AuditLog.document_id == doc.id).order_by(AuditLog.id.desc()).limit(1))
+    if (
+        reason == "auto" and last is not None and last.action == "sheet.saved" and last.user_id == user.id
+        and last.detail.get("reason") == "auto" and now - as_utc(last.created_at) < LOG_MERGE
+    ):
+        d = dict(last.detail)
+        for k in ("cells", "rows_added", "rows_deleted"):
+            d[k] = d.get(k, 0) + change[k]
+        d.update(revision=revision, saves=d.get("saves", 1) + 1, until=iso(now))
+        last.detail = d
+        return
+    audit(db, "sheet.saved", user.id, doc, reason=reason, revision=revision, saves=1, until=iso(now), **change)
+
+
+def export(db: Session, doc: Document, user: User, fmt: str = "csv", revision: int | None = None) -> tuple[str, bytes, str]:
+    """The current sheet as the CargoWise CSV (or Excel) – same writer, headers and column order as before."""
+    if doc.status not in (EDITING, CONFIRMED):
+        raise DocumentError(409, "这份文档还没有可导出的数据")
+    if fmt not in ("csv", "xlsx"):
+        raise DocumentError(400, "format must be csv or xlsx")
+    sh = _sheet(db, doc)
+    if revision is not None and revision != sh.revision:
+        raise DocumentError(409, "表格还有未保存的修改，请先保存再导出", {"revision": sh.revision})
+    template = _template(doc)
+    _, mapped = _profile(doc, template)
+    rows = copy.deepcopy(sh.rows or [])
+    sheets.compute(rows, template)
+    view = sheets.export_view(template, mapped, rows)
+    csv_name = _extraction(db, doc).get("csv_filename") or f"CargoWise Input - {doc.name}.csv"
+    if fmt == "csv":
+        data, filename, media = view.csv_bytes(), csv_name, "text/csv; charset=utf-8"
+    else:
+        data, filename, media = view.xlsx_bytes(), re.sub(r"\.csv$", "", csv_name, flags=re.IGNORECASE) + ".xlsx", XLSX
+    now = utcnow()
+    final = doc.status == CONFIRMED
+    db.add(DocumentExport(
+        document_id=doc.id, revision=sh.revision, format=fmt, filename=filename[:255], sha256=hashlib.sha256(data).hexdigest(),
+        size=len(data), row_count=len(rows), final=final, exported_by=user.id, exported_at=now,
+    ))
+    doc.last_exported_at = now
+    doc.export_count = (doc.export_count or 0) + 1
+    audit(db, "document.exported", user.id, doc, format=fmt, revision=sh.revision, final=final, filename=filename)
+    db.commit()
+    return filename, data, media
+
+
+def confirm(db: Session, doc: Document, user: User, revision: int | None) -> Document:
+    if doc.status != EDITING:
+        raise DocumentError(409, "只有编辑中的文档可以确认")
+    sh = _sheet(db, doc)
+    if revision is not None and revision != sh.revision:
+        raise DocumentError(409, "表格还有未保存的修改，请先保存再确认", {"revision": sh.revision})
+    now = utcnow()
+    doc.status, doc.confirmed_at, doc.confirmed_by, doc.updated_at, doc.updated_by = CONFIRMED, now, user.id, now, user.id
+    db.add(SheetVersion(document_id=doc.id, revision=sh.revision, rows=sh.rows, reason="confirm", created_by=user.id, created_at=now))
+    audit(db, "document.confirmed", user.id, doc, revision=sh.revision, open_issues=len(sh.flags or []))
+    db.commit()
+    return doc
+
+
+def reopen(db: Session, doc: Document, user: User) -> Document:
+    if doc.status != CONFIRMED:
+        raise DocumentError(409, "只有已确认的文档需要重新编辑")
+    now = utcnow()
+    doc.status, doc.confirmed_at, doc.confirmed_by, doc.updated_at, doc.updated_by = EDITING, None, None, now, user.id
+    audit(db, "document.reopened", user.id, doc)
+    db.commit()
+    return doc
+
+
+# ───────────────────────────── lists & dashboard ─────────────────────────────
+
+
+def _like(q: str) -> str:
+    return "%" + q.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def list_documents(
+    db: Session, user: User, *, status: str | None = None, q: str | None = None, created_from: datetime | None = None,
+    created_to: datetime | None = None, mine: bool = True, page: int = 1, page_size: int = 50,
+) -> dict[str, Any]:
+    query = select(Document)
+    if mine:
+        query = query.where(Document.created_by == user.id)
+    if status == "attention":  # failed, or needs a check
+        query = query.where(or_(Document.status == FAILED, and_(Document.status == EDITING, Document.needs_review.is_(True))))
+    elif status == "review":
+        query = query.where(Document.status == EDITING, Document.needs_review.is_(True))
+    elif status in STATUSES:
+        query = query.where(Document.status == status)
+    if q and q.strip():
+        like = _like(q.strip())
+        query = query.where(or_(func.lower(Document.name).like(like, escape="\\"), func.lower(Document.invoice_no).like(like, escape="\\")))
+    if created_from:
+        query = query.where(Document.created_at >= created_from)
+    if created_to:
+        query = query.where(Document.created_at < created_to)
+    total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
+    page_size = max(1, min(page_size, 200))
+    page = max(1, page)
+    docs = db.scalars(
+        query.options(selectinload(Document.files)).order_by(Document.updated_at.desc(), Document.id).offset((page - 1) * page_size).limit(page_size)
+    ).all()
+    return {"items": [doc_json(d) for d in docs], "total": total, "page": page, "page_size": page_size}
+
+
+def stats(db: Session, user: User, mine: bool, since: datetime | None) -> dict[str, int]:
+    scope = [Document.created_by == user.id] if mine else []
+    counts = {s: 0 for s in STATUSES}
+    review = 0
+    for status, flagged, n in db.execute(
+        select(Document.status, Document.needs_review, func.count()).where(*scope).group_by(Document.status, Document.needs_review)
+    ):
+        counts[status] = counts.get(status, 0) + n
+        if status == EDITING and flagged:
+            review += n
+    today = db.scalar(select(func.count()).select_from(Document).where(*scope, Document.created_at >= since)) if since else 0
+    exported = db.scalar(select(func.count()).select_from(Document).where(*scope, Document.last_exported_at.is_not(None)))
+    return {
+        "today": today or 0,
+        "total": sum(counts.values()),
+        **counts,
+        "review": review,
+        "attention": counts[FAILED] + review,
+        "exported": exported or 0,
+    }
+
+
+# ───────────────────────────── JSON ─────────────────────────────
+
+
+def _user_brief(user: User | None) -> dict[str, Any] | None:
+    return {"id": user.id, "name": user.name, "email": user.email} if user else None
+
+
+def doc_json(doc: Document) -> dict[str, Any]:
+    return {
+        "id": doc.id,
+        "name": doc.name,
+        "invoice_no": doc.invoice_no,
+        "invoice_date": doc.invoice_date,
+        "customer_id": doc.customer_id,
+        "status": doc.status,
+        "needs_review": doc.needs_review,
+        "error": doc.error,
+        "line_count": doc.line_count,
+        "created_by": _user_brief(doc.creator),
+        "created_at": iso(doc.created_at),
+        "updated_at": iso(doc.updated_at),
+        "confirmed_at": iso(doc.confirmed_at),
+        "last_exported_at": iso(doc.last_exported_at),
+        "export_count": doc.export_count,
+        "files": [{"id": f.id, "filename": f.filename, "size": f.size} for f in doc.files],
+    }
+
+
+def detail_json(db: Session, doc: Document) -> dict[str, Any]:
+    out: dict[str, Any] = {"document": doc_json(doc)}
+    if doc.confirmed_by:
+        out["document"]["confirmed_by"] = _user_brief(db.get(User, doc.confirmed_by))
+    sh = db.get(DocumentSheet, doc.id)
+    if sh is None:  # processing or failed
+        return out
+    template = _template(doc)
+    _, mapped = _profile(doc, template)
+    ex = _extraction(db, doc)
+    info = sheets.template_info(template.id)
+    out["template"] = {**info, "roles": sheets.column_roles(mapped)}
+    out["sheet"] = {
+        "revision": sh.revision, "rows": sh.rows, "flags": sh.flags, "updated_at": iso(sh.updated_at),
+        "updated_by": _user_brief(db.get(User, sh.updated_by)) if sh.updated_by else None,
+    }
+    out["extraction"] = {k: ex.get(k) for k in ("customer", "document", "csv_filename", "checks", "warnings", "fields", "items", "converted")}
+    exports = db.scalars(select(DocumentExport).where(DocumentExport.document_id == doc.id).order_by(DocumentExport.id.desc()).limit(20)).all()
+    users = {u.id: u for u in db.scalars(select(User).where(User.id.in_({e.exported_by for e in exports})))} if exports else {}
+    out["exports"] = [
+        {"format": e.format, "filename": e.filename, "revision": e.revision, "final": e.final, "rows": e.row_count,
+         "exported_at": iso(e.exported_at), "exported_by": _user_brief(users.get(e.exported_by))}
+        for e in exports
+    ]
+    return out
+
+
+def log_json(db: Session, doc: Document, limit: int = 200) -> list[dict[str, Any]]:
+    entries = db.scalars(select(AuditLog).where(AuditLog.document_id == doc.id).order_by(AuditLog.id.desc()).limit(limit)).all()
+    return [{"action": e.action, "detail": e.detail, "at": iso(e.created_at), "user": _user_brief(e.user)} for e in entries]
+
+
+def versions_json(db: Session, doc: Document) -> list[dict[str, Any]]:
+    rows = db.execute(
+        select(SheetVersion.id, SheetVersion.revision, SheetVersion.reason, SheetVersion.created_at, User.name)
+        .join(User, User.id == SheetVersion.created_by, isouter=True)
+        .where(SheetVersion.document_id == doc.id).order_by(SheetVersion.id.desc()).limit(100)
+    ).all()
+    return [{"id": r.id, "revision": r.revision, "reason": r.reason, "at": iso(r.created_at), "by": r.name} for r in rows]
+
+
+def preview_payload(db: Session, doc: Document) -> dict[str, Any]:
+    """The Preview page for a saved document: the stored PDF on the left, the current sheet on the right."""
+    sh = _sheet(db, doc)
+    template = _template(doc)
+    _, mapped = _profile(doc, template)
+    ex = _extraction(db, doc)
+    rows = copy.deepcopy(sh.rows or [])
+    sheets.compute(rows, template)
+    view = sheets.export_view(template, mapped, rows)
+    try:
+        files = [InputFile(f.filename, storage.get(f)) for f in doc.files]
+        pg = preview.pages(files, ex.get("geometry") or [])
+    except (storage.StorageError, extract.PdfError) as e:
+        raise DocumentError(500, f"原始 PDF 无法读取：{e}") from e
+    src_lines, items, converted = pg["lines"], ex.get("items") or [], ex.get("converted") or []
+    nowhere = {"page": None, "bbox": None, "cells": {}, "joined": 0}
+
+    def src(row: dict[str, Any]) -> int | None:
+        s = row.get("src")
+        return s if isinstance(s, int) and 1 <= s <= len(src_lines) else None
+
+    result = {
+        "status": "review" if doc.needs_review else "ok",
+        "filename": doc.name,
+        "customer": ex.get("customer") or {"id": doc.customer_id, "name": doc.customer_id},
+        "document": ex.get("document") or {},
+        "sources": [f.filename for f in doc.files],
+        "checks": ex.get("checks") or [],
+        "warnings": [],
+        "flags": sh.flags or [],
+        "line_count": len(rows),
+        "lines": [
+            {
+                "line_no": n,
+                "values": {c.letter: view.rows[n - 1][c.index] for c in view.columns},
+                "original": converted[src(r) - 1] if src(r) and src(r) <= len(converted) else {},
+            }
+            for n, r in enumerate(rows, 1)
+        ],
+    }
+    return {
+        "result": result,
+        "preview": {
+            **pg,
+            "lines": [src_lines[src(r) - 1] if src(r) else nowhere for r in rows],
+            "items": [items[src(r) - 1] if src(r) and src(r) <= len(items) else {} for r in rows],
+            "fields": ex.get("fields") or [],
+            "grid": preview.grid(view),
+        },
+    }

@@ -3,333 +3,116 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CIVconvert</title>
+<title>工作面板 · CIVconvert</title>
+<link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/preview.css">
 <style>
-  :root {
-    --bg: #f4f6f9; --panel: #ffffff; --text: #19202c; --muted: #5d6676; --line: #dce1e9; --field: #f8f9fb;
-    --accent: #1d58d6; --accent-text: #ffffff; --accent-soft: #e7eefe;
-    --ok: #12704a; --ok-bg: #e4f4eb; --warn: #8f5200; --warn-bg: #fff2dc; --err: #b3261e; --err-bg: #fdeceb;
-    color-scheme: light;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #11141a; --panel: #191d24; --text: #e6e9ef; --muted: #9aa3b2; --line: #2b313c; --field: #12161c;
-      --accent: #78a0ff; --accent-text: #0c1322; --accent-soft: #1c2944;
-      --ok: #63d29c; --ok-bg: #12301f; --warn: #f1b45a; --warn-bg: #33270e; --err: #ff8c82; --err-bg: #3a1916;
-      color-scheme: dark;
-    }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text);
-         font: 15px/1.55 "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; }
-  main { max-width: 1120px; margin: 0 auto; padding: 28px 16px 72px; }
-  .top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 18px; }
-  h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
-  .sub { margin: 2px 0 0; color: var(--muted); }
-  .version { color: var(--muted); font-size: 13px; white-space: nowrap; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 18px; }
-  .row { display: flex; flex-wrap: wrap; gap: 16px; }
-  .row > label { flex: 1 1 280px; }
-  label.field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
-  select, input[type=password] { font: inherit; color: var(--text); background: var(--field); border: 1px solid var(--line);
-                                 border-radius: 8px; padding: 8px 10px; width: 100%; }
-  .drop { margin-top: 16px; border: 2px dashed var(--line); border-radius: 12px; padding: 30px 16px; text-align: center;
-          color: var(--muted); transition: border-color .15s, background .15s; }
+  .head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 16px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .seg button { font: inherit; font-size: 14px; padding: 7px 14px; border: 0; background: none; color: var(--text); cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .stat { text-align: left; font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 16px; cursor: pointer; }
+  .stat:hover { border-color: var(--accent); }
+  .stat.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .stat .n { display: block; font-size: 26px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 13px; }
+  .stat.warn .n { color: var(--warn); } .stat.err .n { color: var(--err); } .stat.ok .n { color: var(--ok); } .stat.info .n { color: var(--accent); }
+
+  .upload { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; align-items: start; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 18px 16px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; }
   .drop.over { border-color: var(--accent); background: var(--accent-soft); }
-  .drop strong { color: var(--text); font-size: 16px; }
-  .link { font: inherit; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
-  ul.files { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
-  ul.files li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px;
-                border: 1px solid var(--line); border-radius: 8px; overflow-wrap: anywhere; }
-  ul.files .size { color: var(--muted); font-size: 13px; white-space: nowrap; }
-  .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: 14px; }
-  .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
-  button.primary, button.secondary { font: inherit; font-weight: 600; border-radius: 8px; padding: 9px 18px; cursor: pointer; }
-  button.primary { background: var(--accent); color: var(--accent-text); border: 1px solid var(--accent); }
-  button.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .hint { color: var(--muted); font-size: 13px; }
-  .msg { border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; font-size: 14px; }
-  .msg.err { background: var(--err-bg); color: var(--err); }
-  .msg.warn { background: var(--warn-bg); color: var(--text); }
-  .msg ul { margin: 6px 0 0; padding-left: 20px; }
-  .result h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
-  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
-  .badge { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
-  .badge.ok { color: var(--ok); background: var(--ok-bg); }
-  .badge.review { color: var(--warn); background: var(--warn-bg); }
-  .badge.error { color: var(--err); background: var(--err-bg); }
-  .meta { display: flex; flex-wrap: wrap; gap: 4px 20px; margin: 8px 0 14px; color: var(--muted); font-size: 13px; }
-  .meta b { color: var(--text); font-weight: 600; }
-  ul.checks { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 3px; font-size: 14px; }
-  ul.checks li::before { display: inline-block; width: 1.3em; font-weight: 700; }
-  ul.checks li.pass::before { content: "✓"; color: var(--ok); }
-  ul.checks li.fail::before { content: "✗"; color: var(--err); }
-  ul.checks .detail { color: var(--muted); }
-  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; margin-top: 14px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; vertical-align: top; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { background: var(--field); color: var(--muted); font-weight: 600; }
-  th .col { color: var(--accent); font-family: Consolas, ui-monospace, monospace; margin-right: 6px; }
-  td.wide { white-space: normal; min-width: 240px; }
-  td .orig { display: block; color: var(--muted); font-size: 12px; }
-  td.num { font-variant-numeric: tabular-nums; color: var(--muted); }
-  tbody tr:last-child td { border-bottom: 0; }
-  .busy { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent);
-          border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -3px; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  [hidden] { display: none !important; }
+  .drop strong { color: var(--text); }
+  ul.files { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+  ul.files li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; overflow-wrap: anywhere; }
+  .uploadbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 12px; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+  select#customer { width: 100%; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .filters input[type=search] { min-width: 240px; flex: 1 1 240px; }
+  .filters .dates { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table.list { border-collapse: collapse; width: 100%; font-size: 14px; }
+  table.list th, table.list td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  table.list th { background: var(--field); color: var(--muted); font-weight: 600; font-size: 13px; position: sticky; top: 0; }
+  table.list tbody tr { cursor: pointer; }
+  table.list tbody tr:hover td { background: var(--accent-soft); }
+  table.list tbody tr:last-child td { border-bottom: 0; }
+  td.name { white-space: normal !important; min-width: 220px; }
+  td.name b { display: block; overflow-wrap: anywhere; }
+  td.name .hint { display: block; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .acts { display: flex; gap: 6px; }
+  .empty { padding: 36px 16px; text-align: center; color: var(--muted); }
+  .pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
+  .err-line { color: var(--err); font-size: 12px; white-space: normal; max-width: 360px; }
+  @media (max-width: 760px) { .upload { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-<main>
-  <div class="top">
-    <div>
-      <h1>CIVconvert</h1>
-      <p class="sub">Commercial Invoice PDF → CargoWise CSV（自动套用客户模板，无需在线转换或复制粘贴）</p>
+<header class="topbar"><a class="brand" href="/">CIVconvert <small>Commercial Invoice → CargoWise</small></a><span class="grow"></span></header>
+<main class="page">
+  <div class="head">
+    <div><h1>工作面板</h1><p class="sub" id="greeting"></p></div>
+    <div class="seg" role="group" aria-label="范围">
+      <button type="button" data-scope="mine" class="on">我的文档</button><button type="button" data-scope="all">全部文档</button>
     </div>
-    <span class="version" id="version"></span>
   </div>
 
+  <section class="stats" id="stats" aria-label="统计"></section>
+
   <section class="panel">
-    <div class="row">
-      <label class="field">客户 Customer
+    <h2>上传 Commercial Invoice</h2>
+    <div class="upload">
+      <label class="field">客户
         <select id="customer"><option value="">自动识别（根据 PDF 内容）</option></select>
       </label>
-      <label class="field" id="keyRow" hidden>API Key
-        <input type="password" id="apikey" autocomplete="off" placeholder="由管理员提供">
-      </label>
-    </div>
-
-    <div class="drop" id="drop">
-      <strong>把 Commercial Invoice PDF 拖到这里</strong><br>
-      或 <button type="button" class="link" id="pick">选择文件</button>（可多选）
-      <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
-    </div>
-    <ul class="files" id="filelist"></ul>
-    <label class="check" id="mergeRow" hidden>
-      <input type="checkbox" id="merge">
-      <span>这些 PDF 是<b>同一张发票</b>被拆开的 —— 合并成一个 CSV，LNO 连续编号<br>
-      <span class="hint">不勾选：每个 PDF 各自生成一个 CSV</span></span>
-    </label>
-
-    <div class="actions">
-      <button type="button" class="primary" id="go" disabled>转换 Convert</button>
-      <button type="button" class="secondary" id="clear" hidden>清空</button>
-      <span id="status" class="hint"></span>
+      <div>
+        <div class="drop" id="drop">
+          <strong>把 PDF 拖到这里</strong> 或 <button type="button" class="link" id="pick">选择文件</button>（可多选）
+          <input type="file" id="file" accept="application/pdf,.pdf" multiple hidden>
+          <div class="hint">每份发票保存为一个文档，可以随时回来继续编辑</div>
+        </div>
+        <ul class="files" id="filelist"></ul>
+        <div class="uploadbar">
+          <label class="check" id="mergeRow" hidden><input type="checkbox" id="merge"> 这些 PDF 是<b>同一张发票</b>被拆开的（合并成一个文档）</label>
+          <button type="button" class="btn primary" id="go" disabled>上传并转换</button>
+          <span class="hint" id="upStatus"></span>
+        </div>
+      </div>
     </div>
   </section>
 
-  <div id="error"></div>
-  <div id="out"></div>
+  <section class="panel">
+    <div class="filters">
+      <input type="search" id="q" placeholder="搜索发票号或文档名称" aria-label="搜索">
+      <select id="status" aria-label="状态">
+        <option value="">全部状态</option>
+        <option value="processing">处理中</option>
+        <option value="editing">编辑中</option>
+        <option value="review">需复核</option>
+        <option value="confirmed">已确认</option>
+        <option value="failed">失败</option>
+        <option value="attention">失败或需人工检查</option>
+      </select>
+      <span class="dates">创建日期 <input type="date" id="from" aria-label="从"> – <input type="date" id="to" aria-label="到"></span>
+      <button type="button" class="btn small" id="reset">清除筛选</button>
+    </div>
+    <div id="listError"></div>
+    <div class="tablewrap">
+      <table class="list">
+        <thead><tr><th>文档 / 发票号</th><th>状态</th><th class="num">行数</th><th>客户</th><th>创建人</th><th>创建时间</th><th>最后修改</th><th>CSV 导出</th><th>操作</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div class="pager"><span class="hint" id="count"></span><span><button type="button" class="btn small" id="prev">上一页</button> <button type="button" class="btn small" id="next">下一页</button></span></div>
+  </section>
 </main>
-
+<script src="/static/app.js"></script>
 <script src="/static/preview.js"></script>
-<script>
-(() => {
-  const $ = (sel) => document.querySelector(sel);
-  const files = [];
-  let customers = [];
-
-  const el = (tag, attrs = {}, ...children) => {
-    const node = document.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (k === "class") node.className = v; else if (k === "text") node.textContent = v; else node.setAttribute(k, v);
-    }
-    for (const c of children) if (c != null) node.append(c);
-    return node;
-  };
-  const store = {
-    get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
-    set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
-  };
-  const key = () => $("#apikey").value.trim();
-  const authHeaders = () => (key() ? { "X-API-Key": key() } : {});
-  const OFFLINE = "连接不到转换服务（服务没有在运行）。本地使用：双击 start-local.bat 启动，保持那个黑色窗口不要关，然后刷新本页再试。";
-
-  // fetch() only throws when the server cannot be reached at all (the browser says "Failed to fetch")
-  async function request(url, options) {
-    try {
-      return await fetch(url, options);
-    } catch {
-      throw new Error(OFFLINE);
-    }
-  }
-
-  function showError(message) {
-    $("#error").replaceChildren(message ? el("div", { class: "msg err", text: message }) : "");
-  }
-
-  async function loadCustomers() {
-    const res = await request("/api/customers", { headers: authHeaders() });
-    if (res.status === 401) { showError("请填写有效的 API Key"); return; }
-    if (!res.ok) { showError("读取客户列表失败：HTTP " + res.status); return; }
-    showError("");
-    customers = await res.json();
-    const sel = $("#customer");
-    sel.length = 1;
-    for (const c of customers) sel.append(el("option", { value: c.id, text: `${c.name}（${c.id}）` }));
-    sel.value = store.get("civconvert.customer");
-    if (sel.selectedIndex < 0) sel.value = "";
-  }
-
-  function renderFiles() {
-    const ul = $("#filelist");
-    ul.replaceChildren(...files.map((f, i) => {
-      const remove = el("button", { type: "button", class: "link", text: "移除" });
-      remove.onclick = () => { files.splice(i, 1); renderFiles(); };
-      return el("li", {}, el("span", { text: f.name }),
-        el("span", { class: "size" }, `${(f.size / 1024).toFixed(0)} KB  `, remove));
-    }));
-    $("#mergeRow").hidden = files.length < 2;
-    $("#go").disabled = files.length === 0;
-    $("#clear").hidden = files.length === 0;
-  }
-
-  function addFiles(list) {
-    for (const f of list) {
-      if (!/\.pdf$/i.test(f.name)) { showError(`${f.name} 不是 PDF，已忽略`); continue; }
-      if (!files.some((x) => x.name === f.name && x.size === f.size)) files.push(f);
-    }
-    renderFiles();
-  }
-
-  function download(b64, filename, type) {
-    const bin = atob(b64);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([bytes], { type }));
-    const a = el("a", { href: url, download: filename });
-    document.body.append(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  // The preview converts again with the same PDF(s) and the customer found the first time; fetched once per card.
-  function previewLoader(parts, customer) {
-    let pending = null;
-    return () => (pending ??= (async () => {
-      const fd = new FormData();
-      for (const f of parts) fd.append("files", f, f.name);
-      fd.append("customer", customer);
-      const res = await request("/api/preview", { method: "POST", body: fd, headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || data.detail || "HTTP " + res.status);
-      return data;
-    })().catch((e) => { pending = null; throw e; }));
-  }
-
-  function resultCard(r, parts) {
-    const card = el("section", { class: "panel result" });
-    if (r.status === "error") {
-      card.append(el("div", { class: "head" }, el("h2", { text: r.sources.join(", ") }), el("span", { class: "badge error", text: "失败" })),
-        el("div", { class: "msg err", text: r.error }));
-      return card;
-    }
-    const badge = r.status === "ok" ? el("span", { class: "badge ok", text: "✓ 校验通过" })
-                                    : el("span", { class: "badge review", text: "需复核" });
-    card.append(el("div", { class: "head" }, el("h2", { text: r.filename }), badge));
-
-    const meta = el("div", { class: "meta" });
-    const add = (label, value) => value && meta.append(el("span", {}, label + "：", el("b", { text: value })));
-    add("客户", r.customer.name);
-    add("发票号", r.document.invoice_no);
-    add("日期", r.document.invoice_date);
-    add("明细行数", String(r.line_count));
-    add("来源", r.sources.join(" + "));
-    card.append(meta);
-
-    card.append(el("ul", { class: "checks" }, ...r.checks.map((c) =>
-      el("li", { class: c.ok ? "pass" : "fail" }, c.name + "  ", el("span", { class: "detail", text: c.detail })))));
-    if (r.warnings.length) {
-      card.append(el("div", { class: "msg warn" }, el("b", { text: `请复核（${r.warnings.length}）` }),
-        el("ul", {}, ...r.warnings.map((w) => el("li", { text: w })))));
-    }
-
-    const actions = el("div", { class: "actions" });
-    const pvBtn = el("button", { type: "button", class: "secondary", text: "Preview 对比预览" });
-    const load = previewLoader(parts, r.customer.id);
-    pvBtn.onclick = () => CIVPreview.open({ title: r.filename, load, download, returnFocus: pvBtn });
-    const csvBtn = el("button", { type: "button", class: "primary", text: "下载 CSV" });
-    csvBtn.onclick = () => download(r.content_base64, r.filename, "text/csv");
-    actions.append(pvBtn, csvBtn);
-    if (r.xlsx_base64) {
-      const xBtn = el("button", { type: "button", class: "secondary", text: "下载 Excel（核对用）" });
-      xBtn.onclick = () => download(r.xlsx_base64, r.xlsx_filename,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      actions.append(xBtn);
-    }
-    if (r.status !== "ok") actions.append(el("span", { class: "hint", text: "需复核：建议先点 Preview，对照原始发票逐行核对" }));
-    card.append(actions);
-
-    const head = el("tr", {}, ...r.columns.map((c) => el("th", {}, el("span", { class: "col", text: c.letter }), c.header)));
-    const body = r.lines.map((line) => el("tr", {}, ...r.columns.map((c) => {
-      const value = line.values[c.letter] ?? "";
-      const original = line.original[c.letter];
-      const td = el("td", { class: c.field === "description" ? "wide" : (c.field ? "" : "num") }, value);
-      if (original !== undefined && original !== value) td.append(el("span", { class: "orig", text: "原文：" + original }));
-      return td;
-    })));
-    card.append(el("div", { class: "tablewrap" }, el("table", {}, el("thead", {}, head), el("tbody", {}, ...body))));
-    return card;
-  }
-
-  async function convert() {
-    showError("");
-    $("#out").replaceChildren();
-    const sent = files.slice();
-    const fd = new FormData();
-    for (const f of files) fd.append("files", f, f.name);
-    if ($("#customer").value) fd.append("customer", $("#customer").value);
-    if (files.length > 1) fd.append("merge", $("#merge").checked ? "true" : "false");
-    fd.append("format", "json");
-    fd.append("include_xlsx", "true");
-    $("#go").disabled = true;
-    $("#status").replaceChildren(el("span", { class: "busy" }), " 正在读取 PDF…");
-    try {
-      const res = await request("/api/convert", { method: "POST", body: fd, headers: authHeaders() });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || data.detail || "HTTP " + res.status);
-      // one result per PDF, or one result for all of them (merged into one invoice)
-      const separate = data.results.length === sent.length;
-      $("#out").replaceChildren(...data.results.map((r, i) => resultCard(r, separate ? [sent[i]] : sent)));
-      $("#status").textContent = "";
-    } catch (e) {
-      showError("转换失败：" + e.message);
-      $("#status").textContent = "";
-    } finally {
-      $("#go").disabled = files.length === 0;
-    }
-  }
-
-  $("#pick").onclick = () => $("#file").click();
-  $("#file").onchange = (e) => { addFiles(e.target.files); e.target.value = ""; };
-  const drop = $("#drop");
-  drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
-  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-  drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
-  $("#go").onclick = convert;
-  $("#clear").onclick = () => { files.length = 0; renderFiles(); $("#out").replaceChildren(); showError(""); };
-  $("#customer").onchange = (e) => {
-    store.set("civconvert.customer", e.target.value);
-    const c = customers.find((x) => x.id === e.target.value);
-    $("#merge").checked = !!c && c.multi_file === "merge";
-  };
-  $("#apikey").onchange = () => { store.set("civconvert.apikey", key()); loadCustomers().catch((e) => showError(e.message)); };
-
-  (async () => {
-    $("#apikey").value = store.get("civconvert.apikey");
-    try {
-      const info = await (await request("/api/info")).json();
-      $("#version").textContent = "v" + info.version;
-      $("#keyRow").hidden = !info.auth_required;
-      if (info.auth_required && !key()) { showError("请先填写 API Key"); return; }
-      await loadCustomers();
-    } catch (e) {
-      showError(e.message);
-    }
-  })();
-})();
-</script>
+<script src="/static/dashboard.js"></script>
 </body>
 </html>

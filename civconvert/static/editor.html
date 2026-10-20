@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文档 · CIVconvert</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/editor.css">
+<link rel="stylesheet" href="/static/preview.css">
+</head>
+<body class="editor">
+<header class="topbar"><a class="brand" href="/">CIVconvert <small>Commercial Invoice → CargoWise</small></a><span class="grow"></span></header>
+<div class="docbar">
+  <a class="back" href="/">← 工作面板</a>
+  <h1 id="title">…</h1>
+  <span id="badges"></span>
+  <span class="meta" id="meta"></span>
+  <span class="grow"></span>
+  <span class="savestate" id="savestate" role="status" aria-live="polite"></span>
+</div>
+<div class="toolbar" id="toolbar" hidden>
+  <button type="button" class="btn small" id="undo" title="撤销 (Ctrl+Z)">↶ <span class="lbl">撤销</span></button>
+  <button type="button" class="btn small" id="redo" title="重做 (Ctrl+Y)">↷ <span class="lbl">重做</span></button>
+  <span class="sep"></span>
+  <button type="button" class="btn small" id="insert" title="插入行">＋ <span class="lbl">插入行</span></button>
+  <button type="button" class="btn small danger" id="delrows" title="删除所选单元格所在的整行">－ <span class="lbl">删除行</span></button>
+  <button type="button" class="btn small" id="clear" title="清空所选单元格 (Delete)">⌫ <span class="lbl">清除</span></button>
+  <span class="sep"></span>
+  <span class="issues" id="issues"></span>
+  <span class="sep"></span>
+  <button type="button" class="btn small" id="preview" title="对照原始 Invoice">Preview <span class="lbl">对比</span></button>
+  <button type="button" class="btn small" id="pdf" title="打开原始 PDF">PDF</button>
+  <button type="button" class="btn small" id="history" title="操作记录和版本">历史</button>
+  <span class="grow"></span>
+  <button type="button" class="btn small" id="save" title="保存 (Ctrl+S)">Save</button>
+  <button type="button" class="btn small" id="xlsx" title="导出 Excel">Excel</button>
+  <button type="button" class="btn small primary" id="csv" title="导出当前数据为 CargoWise CSV">导出 CSV</button>
+  <button type="button" class="btn small ok" id="confirm" title="标记为已确认 / Ready">Confirm</button>
+  <button type="button" class="btn small" id="reopen" hidden title="重新编辑已确认的文档">重新编辑</button>
+</div>
+<div id="banners"></div>
+<div class="checks" id="checks" hidden></div>
+<div class="fbar" id="fbar" hidden>
+  <span class="addr" id="addr"></span><span class="fx">fx</span>
+  <input type="text" id="formula" aria-label="单元格内容 / 公式" spellcheck="false" autocomplete="off">
+</div>
+<div class="gridwrap" id="gridwrap" hidden><div class="sh" id="grid"></div></div>
+<div class="statusbar" id="statusbar" hidden></div>
+<div class="center" id="center"><span><span class="spin"></span> 正在打开文档…</span></div>
+<script src="/static/app.js"></script>
+<script src="/static/formula.js"></script>
+<script src="/static/sheet.js"></script>
+<script src="/static/preview.js"></script>
+<script src="/static/editor.js"></script>
+</body>
+</html>

@@ -84,8 +84,8 @@ def test_sample_preview_cuts_out_the_table():
 
 
 @needs_sample
-def test_preview_endpoint():
-    res = client.post("/api/preview", files={"files": (SAMPLE.name, SAMPLE.read_bytes(), "application/pdf")})
+def test_preview_endpoint(api_key):
+    res = client.post("/api/preview", files={"files": (SAMPLE.name, SAMPLE.read_bytes(), "application/pdf")}, headers=api_key)
     assert res.status_code == 200
     body = res.json()
     assert body["result"]["filename"] == "CargoWise Input - 8100800394 Commercial Invoice.csv"
@@ -93,13 +93,13 @@ def test_preview_endpoint():
     assert body["result"]["xlsx_base64"] and len(body["preview"]["pages"]) == 1
 
 
-def test_preview_endpoint_reports_conversion_errors():
-    res = client.post("/api/preview", files={"files": ("x.pdf", b"hello", "application/pdf")})
+def test_preview_endpoint_reports_conversion_errors(api_key):
+    res = client.post("/api/preview", files={"files": ("x.pdf", b"hello", "application/pdf")}, headers=api_key)
     assert res.status_code == 422 and "not a PDF" in res.json()["error"]
 
 
 def test_page_and_scripts_are_served():
     assert "CIVPreview" in client.get("/static/preview.js").text
     assert client.get("/static/preview.css").status_code == 200
-    page = client.get("/")
-    assert "/static/preview.js" in page.text and page.headers["cache-control"] == "no-cache"
+    page = client.get("/login")
+    assert "/static/app.js" in page.text and page.headers["cache-control"] == "no-cache"

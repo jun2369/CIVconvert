@@ -28,7 +28,7 @@ def _table(rows: list[list[str]], top: float) -> list[str]:
     return ops
 
 
-def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14) -> bytes:
+def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14, seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
     """Page 1 has the title and the first `per_page` lines; later pages repeat the header row."""
     chunks = [lines[i : i + per_page] for i in range(0, len(lines), per_page)] or [[]]
     streams = []
@@ -36,7 +36,7 @@ def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14)
         ops = ["0.5 w"]
         top = 800.0
         if p == 0:
-            ops += [_text(200, 800, "ISTONE INNOVATION LIMITED", 14), _text(230, 780, "Commercial Invoice", 12),
+            ops += [_text(200, 800, seller, 14), _text(230, 780, "Commercial Invoice", 12),
                     _text(28, 750, "Invoice No. : T-0001"), _text(330, 750, "Issued Date :2026-10-01")]
             top = 730.0
         rows = [HEADER, *chunk] + ([subtotal] if p == len(chunks) - 1 else [])
@@ -64,7 +64,7 @@ def invoice_pdf(lines: list[list[str]], subtotal: list[str], per_page: int = 14)
     return bytes(out)
 
 
-def problem_invoice() -> bytes:
+def problem_invoice(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
     """26 lines over 2 pages with known problems:
     line 3 / line 20: same model, different HS code · line 5: HS code format
     line 9: qty x price != amount · line 12: no description
@@ -83,4 +83,4 @@ def problem_invoice() -> bytes:
         lines.append([model, desc, str(qty), f"US${price}.00", f"US${amount:,}.00", hs])
     qty_total = sum(int(r[2]) for r in lines)
     amount_total = sum(int(r[4][3:-3].replace(",", "")) for r in lines)
-    return invoice_pdf(lines, ["Subtotal :", "", str(qty_total), "", f"US${amount_total:,}.00", ""])
+    return invoice_pdf(lines, ["Subtotal :", "", str(qty_total), "", f"US${amount_total:,}.00", ""], seller=seller)

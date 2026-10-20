@@ -7,3 +7,6 @@ __pycache__/
 # real customer invoices and generated files stay local
 samples/
 output/
+
+# local database and stored PDFs
+data/
