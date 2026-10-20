@@ -213,7 +213,7 @@ def auth_config() -> dict[str, bool]:
 def login(body: LoginIn, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
     email = body.email.strip().lower()
     if not _EMAIL.fullmatch(email) or not body.password:
-        raise AppError(400, "email_password_required", "Enter your e-mail address and password")
+        raise AppError(400, "email_password_required", "Enter your username and password")
     ip = client_ip(request)
     wait = max(failures_by_email.wait(email), failures_by_ip.wait(ip))
     if wait > 0:
@@ -229,7 +229,7 @@ def login(body: LoginIn, request: Request, response: Response, db: Annotated[Ses
         failures_by_email.fail(email)
         failures_by_ip.fail(ip)
         log.info("failed login for %s from %s", email, ip)
-        raise AppError(401, "wrong_credentials", "Wrong e-mail address or password")
+        raise AppError(401, "wrong_credentials", "Wrong username or password")
     failures_by_email.reset(email)
     user = _upsert_user(db, email, account.get("name"), account)
     if not user.is_active:
