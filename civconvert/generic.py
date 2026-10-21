@@ -13,6 +13,9 @@ the one that looks most like the invoice's line items wins: HS codes and prices 
     repeating its header; the last "Total" line is the one that is checked – or a line of only the
     sums of quantity / amount without a "Total" label
   - pictures and scanned pages: read by OCR first (ocr.py), then as above
+  - a header word broken over two lines ("Quantit" / "y") is one word; an HS code written in the description
+    ("… HS:7007.11.0010") becomes the HS code; product codes under a "Description" header next to the
+    descriptions under "Hs Code" are taken for what they are (tidy_items)
   - Excel: by the header row's cells (a header may be written over two rows: "Quantity" over "Pcs");
     a merged cell next to several rows (a product's code, description and HS code next to its size rows)
     counts for each of them; a repeated header row is skipped; the totals row may be a few empty rows
@@ -143,15 +146,33 @@ def _labels(line: list[dict[str, Any]]) -> list[Label]:
     return labels
 
 
-def _merge_below(labels: list[Label], below: list[Label]) -> list[Label] | None:
-    """A header written over two lines ("Unit Price" / "(USD)", "United States" / "HS Code")."""
+def _glue(first: str, second: str) -> str:
+    """Two lines of a header label: a word broken over them ("Specificati" / "on", "Quantit" / "y") is one word."""
+    if first[-1:].isalpha() and re.match(r"[a-z]{1,4}(?![A-Za-z])", second):
+        return f"{first}{second}"
+    return f"{first} {second}"
+
+
+def _glued_cell(raw: str | None) -> str:
+    """A ruled header cell with its broken words joined."""
+    lines = [ln.strip() for ln in (raw or "").split("\n") if ln.strip()]
+    text = lines[0] if lines else ""
+    for ln in lines[1:]:
+        text = _glue(text, ln)
+    return extract.clean_cell(text)
+
+
+def _merge_below(labels: list[Label], below: list[Label], glue: bool = False) -> list[Label] | None:
+    """A header written over two lines ("Unit Price" / "(USD)", "United States" / "HS Code"). `glue`: a word broken
+    over the two lines is joined ("Quantit" / "y")."""
     out = [replace(lb) for lb in labels]
     for b in below:
         hits = [lb for lb in out if min(b.x1, lb.x1) - max(b.x0, lb.x0) > 0]
         if not hits:
             return None
         lb = hits[0]
-        lb.text, lb.x0, lb.x1, lb.bottom = f"{lb.text} {b.text}", min(lb.x0, b.x0), max(lb.x1, b.x1), max(lb.bottom, b.bottom)
+        text = _glue(lb.text, b.text) if glue else f"{lb.text} {b.text}"
+        lb.text, lb.x0, lb.x1, lb.bottom = text, min(lb.x0, b.x0), max(lb.x1, b.x1), max(lb.bottom, b.bottom)
     return out
 
 
@@ -168,6 +189,9 @@ def _word_headers(page_no: int, lines: list[list[dict[str, Any]]], spec: Generic
             merged = _merge_below(labels, below) if gap < 1.2 * (line[0]["bottom"] - line[0]["top"]) else None
             if merged:
                 options.append(merged)
+                glued = _merge_below(labels, below, glue=True)
+                if glued and [lb.text for lb in glued] != [lb.text for lb in merged]:
+                    options.append(glued)
         for opt in options:
             m = match_labels([lb.text for lb in opt], spec)
             if m is None:
@@ -187,7 +211,12 @@ def _ruled_headers(page_no: int, page, spec: GenericSpec, bonus: int) -> list[He
             if sum(1 for c in cells if c) < 3:
                 continue
             m = match_labels(cells, spec)
-            if m is not None:
+            glued = [_glued_cell(c) for c in raw]
+            if glued != cells:  # "Quantit" / "y" in a cell: the fields of the joined words, if they name more
+                g = match_labels(glued, spec)
+                if g is not None and (m is None or g.score > m.score):
+                    m = g
+            if m is not None:  # the cells as the PDF has them: the table is found by them again
                 found.append(Header(m.score + bonus, "ruled", page_no, m.fields, cells=cells))
     return found
 
@@ -249,8 +278,10 @@ def read_pdf(data: bytes, name: str, spec: GenericSpec, carry: Header | None = N
         return result, None
     if header.kind == "ruled":
         result, _ = extract.extract(data, name, _ruled_spec(header, spec), ocr_mode=mode)
-        return result, header
-    return _read_words(data, name, header, spec, carried=header is carry, ocr_mode=mode), header
+    else:
+        result = _read_words(data, name, header, spec, carried=header is carry, ocr_mode=mode)
+    tidy_items(result)
+    return result, header
 
 
 def _union(boxes: list[Bbox]) -> Bbox:
@@ -612,6 +643,7 @@ def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profil
         result.rows.append(RowBox(1, _union([b.bbox for b in rows]), rows[0].cells))
     if drawn[-1]["kind"] == "total":
         result.totals_row = boxes[-1]
+    tidy_items(result)
     return result
 
 
@@ -640,6 +672,60 @@ def _sheet_layout(sheet: str, shown: list[int], drawn: list[dict[str, Any]], fie
     return layout, boxes
 
 
+# ───────────────────────────── values written elsewhere than their header says ─────────────────────────────
+
+_CODE = re.compile(r"^(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-./_#]{2,30}$")  # 7475833-08, 4A0C483-08: one word with digits
+# "HS:7007.11.0010", "HS CODE: 8708.22.0000", "HTS# 9001.50.0000" inside a text
+_HS_IN_TEXT = re.compile(r"\b(?:H\.?\s?T?\.?\s?S\.?|TARIFF)\s*(?:CODE|NO\.?)?\s*[:：#]?\s*(\d{4}(?:[.\s]?\d{2}){1,3})(?![\d.])", re.IGNORECASE)
+_PURE_HS = re.compile(r"^[\d.\s]+$")
+
+
+def _words(text: str) -> int:
+    return len(re.findall(r"[A-Za-z]{2,}", text or ""))
+
+
+def tidy_items(part: PdfExtract) -> None:
+    """Invoices that put values elsewhere than their headers say (in place):
+
+      - the "Description" column holds the product codes and the column after it – headed "HS Code" – the
+        descriptions: "7475833-08" | "Automotive Tempered Glass HS:7007.11.0010" (a Fuyao Glass invoice)
+      - an HS code written inside the description ("… HS:7007.11.0010") when there is no HS code column:
+        it becomes the HS code and leaves the description
+    """
+    items = part.items
+    if not items:
+        return
+    if "model" not in part.labels and "description" in part.labels and "hs_code" in part.labels:
+        if all(_CODE.match(i.get("description", "")) for i in items) and all(_words(i.get("hs_code", "")) >= 2 for i in items):
+            for i in items:
+                i["model"], i["description"], i["hs_code"] = i["description"], i["hs_code"], ""
+            labels = part.labels
+            part.labels = {**labels, "model": labels["description"], "description": labels["hs_code"]}
+            for k, row in enumerate(part.rows):
+                cells = dict(row.cells)
+                if "description" in cells:
+                    cells["model"] = cells["description"]
+                if "hs_code" in cells:
+                    cells["description"] = cells["hs_code"]
+                part.rows[k] = replace(row, cells=cells)
+    moved = False
+    for i in items:
+        if i.get("hs_code") and _PURE_HS.match(i["hs_code"]):
+            continue  # an HS code column of its own
+        for f in ("description", "model"):
+            m = _HS_IN_TEXT.search(i.get(f) or "")
+            if m:
+                i["hs_code"] = re.sub(r"\s", "", m.group(1))
+                i[f] = re.sub(r"\s+", " ", f"{i[f][: m.start()]} {i[f][m.end():]}").strip(" ,;:-")
+                moved = True
+                break
+    if moved and "hs_code" not in part.labels:
+        part.labels = {**part.labels, "hs_code": "HS"}
+        for k, row in enumerate(part.rows):
+            if "description" in row.cells:
+                part.rows[k] = replace(row, cells={**row.cells, "hs_code": row.cells["description"]})
+
+
 # ───────────────────────────── invoice fields & checks ─────────────────────────────
 
 
@@ -659,6 +745,17 @@ def label_values(grids: list[sources.Grid]) -> str:
                 if value:
                     lines.append(f"{label.rstrip(' :')}: {value}")
     return "\n".join(lines)
+
+
+def other_document(text: str, spec: GenericSpec) -> str | None:
+    """What a file without an item table is, when it is a known other document (generic.yaml other_documents):
+    "an Arrival Notice", "an HS-7 declaration …" – by its title at the top, else anywhere in it."""
+    flat = unicodedata.normalize("NFKC", text or "")
+    for part in (flat[:1500], flat):
+        for name, rx in spec.other_documents:
+            if rx.search(part):
+                return name
+    return None
 
 
 def document_fields(text: str, spec: GenericSpec, more: str = "") -> dict[str, str]:

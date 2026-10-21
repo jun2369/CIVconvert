@@ -8,6 +8,8 @@
 1. **读取 PDF、Excel 或图片**（`.pdf`、`.xlsx` / `.xlsm`、`.xls`；图片 `.png`、`.jpg` / `.jpeg`、`.tif` / `.tiff`（可多页）、`.bmp`、`.gif`、`.webp`、`.heic`（iPhone 照片））：按**表头文字**定位明细表格，结果是确定的。
    - **图片和扫描件**（没有文字层的 PDF 页）先用 **OCR** 识别文字（`civconvert/ocr.py`：RapidOCR / PP-OCR 中英文模型，在服务器本机运行，不上传到任何外部服务），同时从图片里找出表格线；之后和普通 PDF 完全一样读取。小图（截图）会先放大再识别；盖在表格线上的印章不影响（被盖住的线会接上）。OCR 可能认错字，所以这样读出的发票一定标记“需复核”（检查项 “OCR 识别”），请对照左边的图片核对后再导出
    - 合计行没有写 “Total”、只有数量 / 金额合计数的（很多中国供应商的发票这样），也认作合计行用于核对；数量合计写在别的列下面（例如 “Unit” 下）但正好等于合计时也算
+   - 表头文字被拆成两行的（“Quantit” / “y”、“Specificati” / “on”）当作一个词；HS 编码写在品名里的（“Automotive Tempered Glass HS:7007.11.0010”）取出来作为税号，品名里去掉；表头和内容对不上的——“Description” 下面其实是产品编号、旁边 “Hs Code” 下面是品名（福耀玻璃 Fuyao 的发票）——按内容对应
+   - 不是商业发票的单据（到货通知、HS-7 申报表、提单、空运单、装箱单、原产地证 …）：转换失败的原因直接写明“this is an Arrival Notice, not a Commercial Invoice”，而不是笼统的“没找到表格”。更多单据类型可以在 `config/generic.yaml` 的 `other_documents` 里加，不用改代码
    - 有客户配置的客户（目前 iStone）：按它的配置读，结果和以前完全一样
    - 其他任何供应商、任何版式：**通用读取**（`config/generic.yaml`）——按表头的常见写法找列：
      Model / Part No / Item# → 产品编号，Description → 品名，HS / HTS / Tariff → 税号，

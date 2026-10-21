@@ -165,6 +165,34 @@ def grid_invoice_pdf(rows: list[list[str]] | None = None, totals: list[str] | No
     return _document(["\n".join(ops).encode("latin-1")])
 
 
+FUYAO_COLUMNS = [("Description", 58), ("Hs Code", 130), ("Specificati|on", 52), ("Quantit|y", 38), ("Unit", 24), ("Delivery Note", 56),
+                 ("PO", 54), ("Unit", 66), ("Amount", 74)]
+
+
+def offset_invoice_pdf(lines: list[list[str]], blank_rows: int = 6) -> bytes:
+    """Like Fuyao Glass's invoice: the headers do not say what is under them – the part numbers under
+    "Description", the description with the HS code in it under "Hs Code" – header words broken over two
+    lines ("Quantit" / "y"), the unit price under a second "Unit", empty ruled rows, then a "total" row with
+    freight / FOB / insurance in the other cells."""
+    qty = sum(int(r[3]) for r in lines)
+    amount = sum(float(r[8].split()[-1]) for r in lines)
+    total = ["total", "", "", str(qty), "PCS", "FREIGHT4905.98", "FOB42821.72", "INSURANCE80", f"USD{amount:.2f}"]
+    ops = ["0.5 w", _text(230, 800, "INVOICE", 14), _text(30, 780, "Invoice No:SYFY-G06-2026-7-15-1"), _text(300, 780, "Date: 2026-07-15"),
+           _text(30, 760, "Sold To: Fuyao Glass America Inc."), _text(300, 745, "Container NO.: OOCU9466731")]
+    top = 720.0
+    rows = [([c for c, _ in FUYAO_COLUMNS], 26.0), *[(r, 16.0) for r in lines], *[([""] * 9, 16.0)] * blank_rows, (total, 16.0)]
+    for cells, height in rows:
+        x = 22.0
+        for (_, w), cell in zip(FUYAO_COLUMNS, cells):
+            ops.append(f"{x:.1f} {top - height:.1f} {w} {height} re S")
+            if cell:  # small print where it would not fit, as on the real invoice
+                ops += _centred(x, w, top - height / 2, cell, max(3, min(8, int((w - 6) / (0.6 * max(len(p) for p in cell.split("|")))))))
+            x += w
+        top -= height
+    ops.append(_text(30, top - 14, "Net Weight 11358.12KGS   Gross Weight 13152.12KGS"))
+    return _document(["\n".join(ops).encode("latin-1")])
+
+
 # ── another supplier: no ruling lines, like many ERP printouts ──
 # (x of each column's left edge; numbers end under the right end of their header)
 TEXT_HEADER = [("PO#", 17), ("Item#", 128), ("Description", 213), ("HTS", 368), ("HTS Description", 446),

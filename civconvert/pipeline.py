@@ -476,6 +476,9 @@ def _convert_general(files: list[InputFile], kinds: list[str], hint: CustomerPro
 
     names = ", ".join(f.name for f in files)
     if not any(p.header_found for p in parts):
+        what = generic.other_document("\n".join(p.text for p in parts), spec)
+        if what:  # an arrival notice, an HS-7 form …: say so
+            raise ConversionError(f"{names}: this is {what}, not a Commercial Invoice – it has no invoice lines to convert. Upload the Commercial Invoice")
         raise ConversionError(
             f"{names}: no line-item table was found – looked for columns such as Description, HS Code / HTS, "
             "Qty, Unit Price, Amount (the general reader's settings: config/generic.yaml)"

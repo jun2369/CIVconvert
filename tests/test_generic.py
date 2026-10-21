@@ -1,6 +1,7 @@
 """The general reader: invoices of suppliers without a customer profile, PDF and Excel."""
 
 import base64
+import re
 import io
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ from openpyxl import Workbook
 from civconvert import generic, preview
 from civconvert.pipeline import ConversionError, InputFile, convert
 from civconvert.profiles import load_generic
-from pdfgen import invoice_pdf, problem_invoice, text_invoice_pdf
+from pdfgen import _document, _right, _text, invoice_pdf, offset_invoice_pdf, problem_invoice, text_invoice_pdf
 
 XLS = Path(__file__).resolve().parent / "fixtures" / "invoice.xls"
 
@@ -259,3 +260,62 @@ def test_codes_that_are_not_the_product_code():
 
 def test_not_a_header():
     assert generic.match_labels(["Name", "Address", "Phone", "Description"], load_generic()) is None
+
+
+FUYAO_LINES = [
+    ["7475833-08", "Automotive Tempered Glass HS:7007.11.0010", "1190*760*780mm", "180", "PCS", "", "DA072239", "USD 6.70", "USD 1206.00"],
+    ["8496037-07", "Automotive Laminated Glass (with bracket) HS: 8708.22.0000", "1190*760*780mm", "420", "PCS", "", "DA072239", "USD 17.56", "USD 7375.20"],
+    ["4A0C483-08", "Automotive Laminated Glass (with heating line) HS: 8708.22.0000", "1720*1120*1220mm", "180", "PCS", "", "DA072239", "USD 46.12", "USD 8301.60"],
+]
+
+
+def test_headers_that_do_not_say_what_is_under_them():
+    """Fuyao Glass: the part numbers under "Description", the description with "HS:…" in it under "Hs Code",
+    header words broken over two lines ("Quantit" / "y"), empty ruled rows, a "total" row with freight / FOB /
+    insurance in its other cells."""
+    r = convert([InputFile("FP-SYFY-G06.pdf", offset_invoice_pdf(FUYAO_LINES))])
+    assert _dfe(r) == [("7475833-08", "Automotive Tempered Glass", "7007.11.0010"),
+                       ("8496037-07", "Automotive Laminated Glass (with bracket)", "8708.22.0000"),
+                       ("4A0C483-08", "Automotive Laminated Glass (with heating line)", "8708.22.0000")]
+    assert {c.name: c.ok for c in r.checks} == {"Line items": True, "Subtotal qty": True, "Subtotal amount": True}
+    assert r.flags == [] and r.document == {"invoice_no": "SYFY-G06-2026-7-15-1", "invoice_date": "2026-07-15"}
+    assert r.parts[0].labels["model"] == "Description" and r.parts[0].labels["qty"] == "Quantit y"
+    box = r.parts[0].rows[0].cells  # the preview marks the part number as the product code, the text as the description
+    assert box["model"][0] < box["description"][0] and box["hs_code"] == box["description"]
+
+
+def test_an_hs_code_inside_the_description():
+    """No HS code column: "… HS CODE: 9405.40.8440" in the description becomes the HS code. A header word broken
+    over two lines without ruling lines ("Quantit" / "y") is read too."""
+    ops = ["0.5 w", _text(220, 800, "COMMERCIAL INVOICE", 12), _text(40, 770, "Invoice No.: LT-2026-31")]
+    for label, x in (("Item No.", 40), ("Description", 120), ("Quantit", 380), ("Unit Price", 440), ("Amount", 520)):
+        ops.append(_text(x, 740, label))
+    ops.append(_text(380, 731, "y"))
+    lines = [("LP-600", "LED PANEL LIGHT 600X600 HS CODE: 9405.40.8440", "20", "12.50", "250.00"),
+             ("LP-300", "LED PANEL LIGHT 300X300 HS CODE: 9405.40.8440", "10", "8.00", "80.00")]
+    y = 712
+    for item, desc, qty, price, amount in lines:
+        ops += [_text(40, y, item), _text(120, y, desc), _right(410, y, qty), _right(490, y, price), _right(560, y, amount)]
+        y -= 16
+    ops += [_text(120, y - 4, "TOTAL"), _right(410, y - 4, "30"), _right(560, y - 4, "330.00")]
+    r = convert([InputFile("lights.pdf", _document(["\n".join(ops).encode("latin-1")]))])
+    assert _dfe(r) == [("LP-600", "LED PANEL LIGHT 600X600", "9405.40.8440"), ("LP-300", "LED PANEL LIGHT 300X300", "9405.40.8440")]
+    assert all(c.ok for c in r.checks) and {c.name for c in r.checks} >= {"Subtotal qty", "Line math"}
+
+
+def test_a_proper_hs_code_column_is_left_alone():
+    r = convert([InputFile("u.pdf", problem_invoice(seller="SOMEONE ELSE LTD"))])
+    assert r.rows[0][5] == "9006910001" and r.rows[0][4] == "Test Product 1"
+
+
+@pytest.mark.parametrize("title, what", [
+    ("ARRIVAL NOTICE   Type of B/L: Sea WayBill   B/L Number: COSU6506620260", "an Arrival Notice"),
+    ("DECLARATION  Importation of Motor Vehicles and Motor Vehicle Equipment Subject to Federal Motor Vehicle Safety", "an HS-7 declaration"),
+    ("BILL OF LADING FOR OCEAN TRANSPORT", "a bill of lading"),
+    ("CERTIFICATE OF ORIGIN", "a certificate of origin"),
+])
+def test_documents_that_are_not_invoices_say_what_they_are(title, what):
+    ops = [_text(40, 800, title, 10), _text(40, 760, "CONTAINER NO. TGBU4887141   40HQ   51 Packages   16115.62 KG"),
+           _text(40, 745, "AUTOMOTIVE LAMINATED GLASS (WITH BRACKET)")]
+    with pytest.raises(ConversionError, match=f"this is {re.escape(what)}.*not a Commercial Invoice"):
+        convert([InputFile("notice.pdf", _document(["\n".join(ops).encode("latin-1")]))])

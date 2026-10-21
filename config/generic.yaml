@@ -88,6 +88,19 @@ document_fields:
     # 发票号后面跟着日期："AI-083-26-27 Dt. 28.09.2026"、"INV-1234 dated 01.02.2026"
     - 'invoice\s*(?:no\.?|number|#)(?:\s*(?:&|and|/)\s*date)?[ \t]*[:.#]?[ \t]*[A-Za-z0-9][A-Za-z0-9\-/._]{2,}[ \t,]*(?:dt\.?|dated|date)[ \t]*[:.]?[ \t]*({DATE})'
 
+# 不是商业发票的单据：找不到明细表时，说明它是什么（"这是到货通知，不是商业发票"），而不是笼统地“没找到表格”。
+# 按顺序，第一条符合的生效（先看文件开头，再看全文）。name 用英文写，会出现在提示里（"this is <name>"）
+other_documents:
+  - { name: "an Arrival Notice", pattern: 'arrival\s*notice|notice\s*of\s*arrival|到货通知' }
+  - { name: "an HS-7 declaration (NHTSA, motor vehicles and equipment)", pattern: 'importation\s*of\s*motor\s*vehicles|\bhs-7\b' }
+  - { name: "a bill of lading / sea waybill", pattern: 'bill\s*of\s*lading|sea\s*way\s*-?\s*bill|提单' }
+  - { name: "an air waybill", pattern: 'air\s*way\s*-?\s*bill|\bawb\b|空运单' }
+  - { name: "a packing list", pattern: 'packing\s*(list|slip)|weight\s*list|装箱单' }
+  - { name: "a certificate of origin", pattern: 'certificate\s*of\s*origin|原产地证' }
+  - { name: "a delivery order", pattern: 'delivery\s*order' }
+  - { name: "a customs entry summary (CBP 7501)", pattern: 'entry\s*summary|cbp\s*form\s*7501' }
+  - { name: "a debit / credit note", pattern: '(debit|credit)\s*note' }
+
 # 和客户配置一样：填入模板的列、校验、文件名
 required: [model, description, hs_code]
 mapping:

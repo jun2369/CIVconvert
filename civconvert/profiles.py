@@ -9,7 +9,7 @@ from __future__ import annotations
 import codecs
 import fnmatch
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -301,6 +301,7 @@ class GenericSpec:
     other_title: re.Pattern
     total_row: re.Pattern
     document_fields: dict[str, list[re.Pattern]]
+    other_documents: list[tuple[str, re.Pattern]] = field(default_factory=list)  # (what it is, its wording): not an invoice
 
 
 def load_generic() -> GenericSpec:
@@ -340,6 +341,11 @@ def load_generic() -> GenericSpec:
             if rx.groups < 1:
                 raise ConfigError(f"{path.name}: document_fields.{key} needs a (group) around the value")
             doc_fields[str(key)].append(rx)
+    others = []
+    for n, item in enumerate(d.get("other_documents") or [], 1):
+        if not isinstance(item, dict) or not item.get("name") or not item.get("pattern"):
+            raise ConfigError(f"{path.name}: other_documents entry {n} needs a 'name' and a 'pattern'")
+        others.append((str(item["name"]), _regex(path, f"other_documents.{n}", str(item["pattern"]))))
     return GenericSpec(
         profile=profile,
         synonyms=synonyms,
@@ -351,6 +357,7 @@ def load_generic() -> GenericSpec:
         other_title=_regex(path, "other_title", d.get("other_title") or r"packing\s*list|\bcontract\b"),
         total_row=_regex(path, "total_row", total_row),
         document_fields=doc_fields,
+        other_documents=others,
     )
 
 
