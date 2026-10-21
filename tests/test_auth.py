@@ -15,7 +15,7 @@ GOOD = {"email": "junjie.ma@agslogistics.com", "password": "right-password"}
 def nimbus(monkeypatch):
     """A fake Nimbus sign-in endpoint; `calls` records what our server sent."""
     calls = []
-    state = {"mode": "ok"}
+    state = {"mode": "ok", "accounts": [GOOD]}  # Nimbus compares the e-mail as it was registered
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
@@ -24,7 +24,7 @@ def nimbus(monkeypatch):
             raise httpx.ConnectError("no route to host")
         if state["mode"] == "500":
             return httpx.Response(500, text="oops")
-        if body == GOOD:
+        if body in state["accounts"]:
             return httpx.Response(200, json={"success": True, "data": {"userId": 4711, "token": "nimbus-jwt", "role": "OP", "refreshAt": 1, "expireAt": 2}})
         return httpx.Response(200, json={"success": False, "message": "wrong password"})
 
@@ -40,7 +40,9 @@ def test_nimbus_login_creates_the_user_and_a_session(app_client, nimbus):
     assert res.status_code == 200, res.text
     assert res.json()["user"]["email"] == "junjie.ma@agslogistics.com"
     assert res.json()["user"]["name"] == "Junjie Ma"
-    assert nimbus["calls"] == [{"url": "https://nimbus.example/api/v2/userauth/auth/sign-in", "body": GOOD}]
+    url = "https://nimbus.example/api/v2/userauth/auth/sign-in"
+    # as typed first (Nimbus does not know "Junjie.Ma@..."), then in lower case
+    assert nimbus["calls"] == [{"url": url, "body": {**GOOD, "email": "Junjie.Ma@agslogistics.com"}}, {"url": url, "body": GOOD}]
     cookie = res.headers["set-cookie"]
     assert "civ_session=" in cookie and "HttpOnly" in cookie and "samesite=lax" in cookie.lower()
     assert app_client.get("/api/auth/me").json()["user"]["email"] == GOOD["email"]
@@ -59,6 +61,24 @@ def test_wrong_password_and_rate_limit(app_client, nimbus):
     res = app_client.post("/api/auth/login", json=GOOD)  # even the right password waits now
     assert res.status_code == 429 and "Retry-After" in res.headers
     assert len(nimbus["calls"]) == 5
+
+
+def test_an_account_registered_with_capitals(app_client, nimbus):
+    """Nimbus knows the account as "Cindy.guan@...": the e-mail is sent as typed, like the Nimbus login page
+    sends it (it used to be sent in lower case, which Nimbus refused); our user is the lower-case address."""
+    cindy = {"email": "Cindy.guan@agslogistics.com", "password": "her-password"}
+    nimbus["state"]["accounts"].append(cindy)
+    res = app_client.post("/api/auth/login", json=cindy)
+    assert res.status_code == 200, res.text
+    assert res.json()["user"]["email"] == "cindy.guan@agslogistics.com"
+    assert [c["body"] for c in nimbus["calls"]] == [cindy]  # one call, nothing changed
+
+
+def test_wrong_password_typed_with_capitals_is_one_failed_attempt(app_client, nimbus):
+    res = app_client.post("/api/auth/login", json={"email": "Junjie.Ma@agslogistics.com", "password": "nope"})
+    assert res.status_code == 401 and res.json()["code"] == "wrong_credentials"
+    assert [c["body"]["email"] for c in nimbus["calls"]] == ["Junjie.Ma@agslogistics.com", "junjie.ma@agslogistics.com"]
+    assert len(auth.failures_by_email.hits["junjie.ma@agslogistics.com"]) == 1
 
 
 def test_nimbus_unreachable_is_not_a_wrong_password(app_client, nimbus):

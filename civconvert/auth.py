@@ -2,8 +2,9 @@
 
 Login (same protocol as the HTS rule engine): the user types their Nimbus e-mail and password
 on our page, we POST them to {NIMBUS_API_URL}/api/v2/userauth/auth/sign-in and accept the
-answer when success is true and data has userId and token. The password is never stored or
-logged, and the Nimbus token is not kept.
+answer when success is true and data has userId and token. The e-mail goes to Nimbus as typed
+(like the Nimbus login page; an account may have capitals), then in lower case; our user is the
+lower-case address. The password is never stored or logged, and the Nimbus token is not kept.
 
 Session: a random token in an HttpOnly cookie (scripts cannot read it); only its SHA-256 is
 stored in user_sessions, so logging out really ends it. Requests that change data must also
@@ -220,8 +221,13 @@ def login(body: LoginIn, request: Request, response: Response, db: Annotated[Ses
         minutes = int(wait // 60) + 1
         raise AppError(429, "too_many_attempts", f"Too many failed logins – try again in {minutes} minute(s)", {"minutes": minutes},
                        headers={"Retry-After": str(int(wait) + 1)})
+    typed = body.email.strip()
     try:
-        account = nimbus_sign_in(email, body.password)
+        # as typed, like the Nimbus login page: Nimbus may know the account with capitals ("Cindy.guan@...");
+        # then in lower case, which is how it was sent before
+        account = nimbus_sign_in(typed, body.password)
+        if account is None and typed != email:
+            account = nimbus_sign_in(email, body.password)
     except NimbusUnavailable as e:
         log.warning("Nimbus login unavailable: %s", e)
         raise AppError(502, "nimbus_unavailable", "The Nimbus account system cannot be reached – try again later") from e
