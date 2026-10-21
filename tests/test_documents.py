@@ -232,6 +232,35 @@ def test_everyone_only_sees_their_own_documents(app_client):
     assert names(created_from=tomorrow) == []
 
 
+def test_documents_can_be_deleted(app_client):
+    from sqlalchemy import func, select
+
+    from civconvert.models import AuditLog, DocumentFile, SheetVersion
+
+    login(app_client, "op.one@agslogistics.com")
+    a, b, c = (upload(app_client, f"{n}.pdf", problem_invoice()) for n in ("a", "b", "c"))
+    login(app_client, "op.two@agslogistics.com")
+    other = upload(app_client, "other.pdf", problem_invoice())
+    # someone else's documents are not deleted (they are not found)
+    res = app_client.post("/api/documents/delete", json={"ids": [a["id"], other["id"]]})
+    assert res.status_code == 200 and res.json() == {"deleted": 1, "not_found": [a["id"]]}
+
+    login(app_client, "op.one@agslogistics.com")
+    res = app_client.post("/api/documents/delete", json={"ids": [a["id"], b["id"], a["id"]]})
+    assert res.json() == {"deleted": 2, "not_found": []}
+    assert [d["name"] for d in app_client.get("/api/documents").json()["items"]] == ["c"]
+    assert app_client.get(f"/api/documents/{a['id']}").status_code == 404
+    assert app_client.get(f"/api/documents/{a['id']}/files/{a['files'][0]['id']}").status_code == 404
+    with db.session_scope() as s:  # the original file, the sheet's versions, the history: gone with it
+        for model in (DocumentFile, SheetVersion, AuditLog):
+            assert s.scalar(select(func.count()).select_from(model).where(model.document_id.in_([a["id"], b["id"]]))) == 0
+        [entry] = s.scalars(select(AuditLog).where(AuditLog.action == "documents.deleted", AuditLog.user_id.is_not(None))
+                            .order_by(AuditLog.id.desc()).limit(1))
+        assert entry.detail["count"] == 2 and {d["name"] for d in entry.detail["documents"]} == {"a", "b"}
+    assert app_client.post("/api/documents/delete", json={"ids": []}).status_code == 422
+    assert app_client.get("/api/documents/stats").json()["total"] == 1
+
+
 def test_documents_are_deleted_four_months_after_upload(user_client):
     from sqlalchemy import func, select
 

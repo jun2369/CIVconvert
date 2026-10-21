@@ -80,6 +80,10 @@ def test_the_civ_of_an_email_becomes_an_auto_document(client):
     assert s["items"][1]["attachments"][0]["document_name"] == "CI-T-0001"  # the newest e-mail first
     tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     assert client.get("/api/intake/today", params={"since": tomorrow}).json()["emails"] == 0
+    # the OP deletes the document: the e-mail stays recorded, its attachment shows the document is gone
+    assert client.post("/api/documents/delete", json={"ids": [doc_id]}).json()["deleted"] == 1
+    [civ] = [a for a in client.get("/api/intake/today", params={"since": since}).json()["items"][1]["attachments"] if a["document_id"]]
+    assert civ["document_deleted"] is True and civ["document_name"] is None
 
     # another OP sees neither the documents nor the e-mails
     login(client, "op.two@agslogistics.com")

@@ -340,7 +340,9 @@ def today(db: Session, user: User, since: datetime | None) -> dict[str, Any]:
         "civ": sum(r.civ_count for r in rows),
         "no_civ": sum(1 for r in rows if not r.civ_count),
         "items": [{**_summary(r), "at": iso(r.created_at),
-                   "attachments": [{**a, "document_name": names.get(a.get("document_id"))} for a in r.attachments or []]} for r in rows],
+                   "attachments": [{**a, "document_name": names.get(a.get("document_id")),
+                                    "document_deleted": bool(a.get("document_id")) and a.get("document_id") not in names}
+                                   for a in r.attachments or []]} for r in rows],
     }
 
 

@@ -7,6 +7,8 @@
   const state = { status: "", q: "", from: "", to: "", page: 1, pageSize: 25 };
   let timer = null;
   let editing = 0; // an invoice number / customer being typed: the list is not reloaded under it
+  let shown = []; // the documents on this page
+  const picked = new Set(); // ticked to be deleted (ids, on this page)
 
   // ───────────── filters live in the URL, so refresh / back keep them ─────────────
   function readUrl() {
@@ -84,7 +86,8 @@
         el("b", { text: m.email.subject || t("intake.no_subject") }),
         el("ul", {}, ...m.attachments.map((a) => el("li", { class: a.decision === "civ" ? "" : "skip", title: a.reason || "" },
           el("span", { text: `${a.name} — ${why(a)}` }),
-          a.document_id ? el("span", {}, " → ", el("a", { href: `/documents/${a.document_id}` }, a.document_name || t("intake.open"))) : null)))))),
+          a.document_id && a.document_deleted ? el("span", { class: "skip", text: " → " + t("intake.deleted") }) : null,
+          a.document_id && !a.document_deleted ? el("span", {}, " → ", el("a", { href: `/documents/${a.document_id}` }, a.document_name || t("intake.open"))) : null)))))),
       ok: t("intake.close"),
       cancel: null,
     });
@@ -99,13 +102,16 @@
     if (state.to) p.set("created_to", localDay(state.to, true));
     const data = await api("/api/documents?" + p);
     $("#listError").replaceChildren();
+    shown = data.items;
+    for (const id of [...picked]) if (!shown.some((d) => d.id === id)) picked.delete(id); // ticks are for this page only
     const tbody = $("#rows");
     if (!data.items.length) {
-      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "11", class: "empty" },
+      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "12", class: "empty" },
         t(state.status || state.q || state.from || state.to ? "list.empty_filtered" : "list.empty"))));
     } else {
       tbody.replaceChildren(...data.items.map(row));
     }
+    syncPicks();
     const pages = Math.max(1, Math.ceil(data.total / data.page_size));
     $("#count").textContent = t("list.count", { total: data.total, page: data.page, pages });
     $("#prev").disabled = data.page <= 1;
@@ -128,7 +134,10 @@
       el("span", { class: "hint", text: [d.invoice_no && t("row.invoice", { no: d.invoice_no }), d.files.length > 1 && t("row.pdfs", { n: d.files.length })].filter(Boolean).join(" · ") }));
     if (d.status === "failed" && d.error) name.append(el("span", { class: "err-line", text: d.error }));
     const auto = d.customer_id === "auto";
-    return el("tr", { onclick: open, title: t("row.open_tip") },
+    const tick = el("input", { type: "checkbox", checked: picked.has(d.id), "aria-label": t("row.select", { name: d.name }),
+      onchange: (e) => { if (e.target.checked) picked.add(d.id); else picked.delete(d.id); syncPicks(); } });
+    return el("tr", { onclick: open, title: t("row.open_tip"), "data-id": d.id, class: picked.has(d.id) ? "picked" : "" },
+      el("td", { class: "pick", title: "", onclick: (e) => e.stopPropagation() }, tick),
       name,
       detail(d, "invoice_no", { shown: d.invoice_no, start: d.invoice_no }, "row.edit_invoice", 100),
       el("td", {}, ...statusBadges(d)),
@@ -192,6 +201,43 @@
     };
     view();
     return td;
+  }
+
+  // ───────────── ticking documents and deleting them ─────────────
+  function syncPicks() {
+    for (const tr of document.querySelectorAll("#rows tr[data-id]")) {
+      const on = picked.has(tr.dataset.id);
+      tr.classList.toggle("picked", on);
+      const box = tr.querySelector(".pick input");
+      if (box) box.checked = on;
+    }
+    const n = picked.size;
+    $("#delSel").disabled = n === 0;
+    $("#delSel").textContent = n ? t("del.button_n", { n }) : t("del.button");
+    $("#pickAll").checked = n > 0 && n === shown.length;
+    $("#pickAll").indeterminate = n > 0 && n < shown.length;
+  }
+
+  async function deleteSelected() {
+    const docs = shown.filter((d) => picked.has(d.id));
+    if (!docs.length) return;
+    const ok = await ask({
+      title: t("del.title", { n: docs.length }),
+      body: el("div", {}, el("p", { class: "msg err", text: t("del.warn") }),
+        el("ul", { class: "del-list" }, ...docs.slice(0, 10).map((d) => el("li", { text: d.invoice_no ? `${d.name} (${d.invoice_no})` : d.name })),
+          docs.length > 10 ? el("li", { class: "hint", text: t("del.more", { n: docs.length - 10 }) }) : null)),
+      ok: t("del.ok"),
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      const r = await api("/api/documents/delete", { method: "POST", json: { ids: docs.map((d) => d.id) } });
+      picked.clear();
+      toast(t("toast.deleted", { n: r.deleted }));
+    } catch (e) {
+      toast(t("toast.delete_failed", { error: e.message }), "err");
+    }
+    refresh();
   }
 
   async function exportCsv(d) {
@@ -283,6 +329,12 @@
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
   $("#go").onclick = upload;
+  $("#delSel").onclick = deleteSelected;
+  $("#pickAll").onchange = (e) => {
+    if (e.target.checked) for (const d of shown) picked.add(d.id);
+    else picked.clear();
+    syncPicks();
+  };
   let typing;
   $("#q").addEventListener("input", (e) => { clearTimeout(typing); typing = setTimeout(() => { state.q = e.target.value; state.page = 1; refresh(); }, 300); });
   $("#status").onchange = (e) => { state.status = e.target.value; state.page = 1; refresh(); };

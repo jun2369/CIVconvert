@@ -3,6 +3,7 @@
     POST /api/documents                  upload PDF(s) -> documents (status processing)
     GET  /api/documents                  list: status, q, created_from/to, page
     GET  /api/documents/stats            dashboard counts
+    POST /api/documents/delete           delete own documents for good {ids}
     GET  /api/documents/{id}             document, template columns, sheet, extraction, exports
     PATCH /api/documents/{id}            the invoice number / customer name shown in the list
     PUT  /api/documents/{id}/sheet       save the sheet {revision, rows, reason}
@@ -75,6 +76,16 @@ def list_documents(
 ) -> dict[str, Any]:
     docs.expire_stuck(db)
     return docs.list_documents(db, user, status=status, q=q, created_from=created_from, created_to=created_to, page=page, page_size=page_size)
+
+
+class DeleteIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post("/delete")
+def delete_documents(body: DeleteIn, user: CurrentUser, db: DB) -> dict[str, Any]:
+    """Delete the user's own documents for good (the page asks first: this cannot be undone)."""
+    return docs.delete_documents(db, user, body.ids)
 
 
 @router.get("/stats")

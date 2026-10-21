@@ -356,6 +356,24 @@ def reopen(db: Session, doc: Document, user: User) -> Document:
     return doc
 
 
+def delete_documents(db: Session, user: User, ids: list[str]) -> dict[str, Any]:
+    """Delete some of the user's own documents for good – the original files, the sheet, its versions, exports and
+    history (the database cascades). Documents of other users are not touched. Who deleted what is logged."""
+    wanted = list(dict.fromkeys(ids))
+    docs = db.scalars(select(Document).where(Document.id.in_(wanted), Document.created_by == user.id)).all() if wanted else []
+    for d in docs:
+        for f in d.files:
+            if f.storage != "db":
+                storage.delete(f)
+    if docs:
+        db.execute(delete(Document).where(Document.id.in_([d.id for d in docs])))
+        audit(db, "documents.deleted", user.id, None, count=len(docs), documents=[{"id": d.id, "name": d.name} for d in docs][:100])
+        db.commit()
+        log.info("%s deleted %d document(s)", user.email, len(docs))
+    found = {d.id for d in docs}
+    return {"deleted": len(docs), "not_found": [i for i in wanted if i not in found]}
+
+
 DETAILS = {"invoice_no": 100, "customer_name": 255}  # what the user may change in the list, and its longest length
 
 

@@ -52,6 +52,15 @@
   .cell-edit:hover, .cell-edit:focus-visible { border-color: var(--line-strong); background: var(--field); outline: none; }
   .cell-edit:hover .pen, .cell-edit:focus-visible .pen, tr:hover .cell-edit .pen { opacity: 1; }
   input.cell-input { width: 100%; min-width: 16ch; margin: -5px -7px; padding: 4px 6px; font: inherit; }
+  /* ticking documents to delete them */
+  table.list th.pick, table.list td.pick { width: 34px; padding-right: 0; cursor: default; }
+  table.list th.pick + th::before { display: none; }
+  .pick input { width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent); vertical-align: middle; }
+  table.list tbody tr.picked td { background: var(--accent-sel); }
+  #delSel { margin-left: auto; }
+  #delSel:not(:disabled) { border-color: var(--err); }
+  ul.del-list { margin: 8px 0 0; padding-left: 18px; max-height: 40vh; overflow: auto; }
+  ul.del-list li { overflow-wrap: anywhere; }
   /* Power Automate Cloud: today's e-mails, and where a document came from */
   .intake { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 8px 0 0; font-size: 14px; color: var(--text); }
   .intake .warn { color: var(--warn); }
@@ -105,11 +114,13 @@
       <span class="dates"><span data-i18n="list.created">Created</span>
         <input type="date" id="from" data-i18n-aria="list.from"> – <input type="date" id="to" data-i18n-aria="list.to"></span>
       <button type="button" class="btn small" id="reset" data-i18n="list.clear">Clear filters</button>
+      <button type="button" class="btn small danger" id="delSel" disabled data-i18n="del.button">Delete selected</button>
     </div>
     <div id="listError"></div>
     <div class="tablewrap">
       <table class="list">
         <thead><tr>
+          <th class="pick"><input type="checkbox" id="pickAll" data-i18n-aria="th.select_all" aria-label="Select all"></th>
           <th data-i18n="th.document">Document / Invoice No.</th><th data-i18n="th.invoice">Invoice Number</th><th data-i18n="th.status">Status</th>
           <th class="num" data-i18n="th.lines">Lines</th><th data-i18n="th.customer">Customer</th><th data-i18n="th.source">Source</th><th data-i18n="th.creator">Created by</th>
           <th data-i18n="th.created">Created</th><th data-i18n="th.modified">Last modified</th><th data-i18n="th.csv">CSV export</th><th data-i18n="th.actions">Actions</th>
