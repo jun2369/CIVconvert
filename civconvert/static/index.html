@@ -52,12 +52,25 @@
   .cell-edit:hover, .cell-edit:focus-visible { border-color: var(--line-strong); background: var(--field); outline: none; }
   .cell-edit:hover .pen, .cell-edit:focus-visible .pen, tr:hover .cell-edit .pen { opacity: 1; }
   input.cell-input { width: 100%; min-width: 16ch; margin: -5px -7px; padding: 4px 6px; font: inherit; }
+  /* Power Automate Cloud: today's e-mails, and where a document came from */
+  .intake { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 8px 0 0; font-size: 14px; color: var(--text); }
+  .intake .warn { color: var(--warn); }
+  .badge.auto { color: var(--info); background: var(--info-bg); }
+  .src-manual { color: var(--muted); }
+  dialog.dlg:has(.mails) { width: min(720px, calc(100vw - 32px)); }
+  .mails { display: grid; gap: 12px; max-height: 60vh; overflow: auto; }
+  .mails section { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; }
+  .mails .when { color: var(--muted); font-size: 13px; }
+  .mails ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
+  .mails li { margin: 2px 0; overflow-wrap: anywhere; }
+  .mails .skip { color: var(--muted); }
 </style>
 </head>
 <body>
 <header class="topbar"><a class="brand" href="/"><span class="nb">NIMBUS</span> CIV CONVERTER</a><span class="grow"></span></header>
 <main class="page">
-  <div class="head"><h1 data-i18n="dash.heading">Dashboard</h1><p class="sub" id="greeting"></p></div>
+  <div class="head"><h1 data-i18n="dash.heading">Dashboard</h1><p class="sub" id="greeting"></p>
+    <p class="intake" id="intake" hidden></p></div>
 
   <section class="stats" id="stats" aria-label="Counts"></section>
 
@@ -98,7 +111,7 @@
       <table class="list">
         <thead><tr>
           <th data-i18n="th.document">Document / Invoice No.</th><th data-i18n="th.invoice">Invoice Number</th><th data-i18n="th.status">Status</th>
-          <th class="num" data-i18n="th.lines">Lines</th><th data-i18n="th.customer">Customer</th><th data-i18n="th.creator">Created by</th>
+          <th class="num" data-i18n="th.lines">Lines</th><th data-i18n="th.customer">Customer</th><th data-i18n="th.source">Source</th><th data-i18n="th.creator">Created by</th>
           <th data-i18n="th.created">Created</th><th data-i18n="th.modified">Last modified</th><th data-i18n="th.csv">CSV export</th><th data-i18n="th.actions">Actions</th>
         </tr></thead>
         <tbody id="rows"></tbody>

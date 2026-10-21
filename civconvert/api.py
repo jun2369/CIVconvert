@@ -10,7 +10,7 @@ Conversion API – a logged-in user, or X-API-Key = one of API_KEY (comma-separa
     POST /api/convert        multipart upload -> CSV file, or JSON with format=json
     POST /api/convert/json   base64 JSON in/out, accepts Outlook attachments as-is (Power Automate)
     POST /api/preview        the PDF(s) of one invoice -> result + page images for the review page
-Documents API: see documents_api.py.  Login: see auth.py.
+E-mails from Power Automate Cloud (X-API-Key): see intake.py.  Documents API: see documents_api.py.  Login: see auth.py.
 """
 
 import asyncio
@@ -31,7 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from . import __version__, auth, db, documents, documents_api, preview, settings, sources
+from . import __version__, auth, db, documents, documents_api, intake, preview, settings, sources
 from .errors import AppError
 from .pipeline import ConversionError, Failure, InputFile, Result, convert, convert_many
 from .profiles import ConfigError, load_customers
@@ -84,6 +84,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="CIVconvert", version=__version__, description="Commercial Invoice PDF -> CargoWise CSV", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(documents_api.router)
+app.include_router(intake.router)
 NO_CACHE = {"Cache-Control": "no-cache"}  # revalidate the page and its scripts, so an update is never half-loaded
 
 

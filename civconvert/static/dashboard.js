@@ -59,6 +59,37 @@
     }));
   }
 
+  // ───────────── e-mails received today by Power Automate Cloud ─────────────
+  async function loadIntake() {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const line = $("#intake");
+    let s;
+    try {
+      s = await api("/api/intake/today?since=" + encodeURIComponent(midnight.toISOString()));
+    } catch { line.hidden = true; return; } // never in the way of the list
+    line.hidden = !s.ever; // only for users whose mailbox is connected
+    if (!s.ever) return;
+    line.replaceChildren(el("span", { text: t("intake.today", { emails: s.emails, attachments: s.attachments, civ: s.civ }) }),
+      s.no_civ ? el("span", { class: "warn", text: t("intake.no_civ", { n: s.no_civ }) }) : null,
+      s.emails ? el("button", { type: "button", class: "link", onclick: () => mails(s.items) }, t("intake.details")) : null);
+  }
+
+  function mails(items) {
+    const why = (a) => t("intake.code." + (a.code || (a.decision === "civ" ? "civ" : "not_civ")), { other: a.reason || "" });
+    ask({
+      title: t("intake.title"),
+      body: el("div", { class: "mails" }, ...items.map((m) => el("section", {},
+        el("div", { class: "when", text: [fmtTime(m.at), m.email.from].filter(Boolean).join(" · ") }),
+        el("b", { text: m.email.subject || t("intake.no_subject") }),
+        el("ul", {}, ...m.attachments.map((a) => el("li", { class: a.decision === "civ" ? "" : "skip", title: a.reason || "" },
+          el("span", { text: `${a.name} — ${why(a)}` }),
+          a.document_id ? el("span", {}, " → ", el("a", { href: `/documents/${a.document_id}` }, a.document_name || t("intake.open"))) : null)))))),
+      ok: t("intake.close"),
+      cancel: null,
+    });
+  }
+
   // ───────────── list ─────────────
   async function loadList() {
     const p = new URLSearchParams({ page: state.page, page_size: state.pageSize });
@@ -70,7 +101,7 @@
     $("#listError").replaceChildren();
     const tbody = $("#rows");
     if (!data.items.length) {
-      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "10", class: "empty" },
+      tbody.replaceChildren(el("tr", {}, el("td", { colspan: "11", class: "empty" },
         t(state.status || state.q || state.from || state.to ? "list.empty_filtered" : "list.empty"))));
     } else {
       tbody.replaceChildren(...data.items.map(row));
@@ -107,7 +138,11 @@
         start: d.customer_name || (auto ? "" : d.customer_id),
         placeholder: auto ? t("list.auto") : d.customer_id,
       }, "row.edit_customer", 255),
-      el("td", { text: d.created_by ? d.created_by.name : "" }),
+      el("td", {}, d.source === "auto"
+        ? el("span", { class: "badge auto", title: d.email ? t("src.auto_tip", { subject: d.email.subject || "–", from: d.email.from || "–",
+          time: fmtTime(d.email.received_at) }) : t("src.auto_tip_short") }, t("src.auto"))
+        : el("span", { class: "src-manual", text: t("src.manual") })),
+      el("td", { text: d.source === "auto" ? "Power Automate" : d.created_by ? d.created_by.name : "" }),
       el("td", { text: fmtTime(d.created_at) }),
       el("td", { text: fmtTime(d.updated_at) }),
       el("td", {}, d.last_exported_at
@@ -202,7 +237,7 @@
       return;
     }
     try {
-      await Promise.all([loadStats(), loadList()]);
+      await Promise.all([loadStats(), loadList(), loadIntake()]);
     } catch (e) {
       $("#listError").replaceChildren(el("div", { class: "msg err", text: t("list.load_failed", { error: e.message }) }));
     }
@@ -257,6 +292,7 @@
   $("#prev").onclick = () => { state.page--; refresh(); };
   $("#next").onclick = () => { state.page++; refresh(); };
   window.addEventListener("focus", () => refresh());
+  setInterval(() => { if (!document.hidden) refresh(); }, 60000); // documents arriving by e-mail show up by themselves
 
   (async () => {
     CIVi18n.apply();

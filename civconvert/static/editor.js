@@ -52,7 +52,8 @@
     const ex = detail.extraction || {};
     $("#meta").textContent = [doc.invoice_no && t("ed.meta_invoice", { no: doc.invoice_no }), doc.invoice_date,
       doc.customer_name || (ex.customer && (ex.customer.id === "auto" ? t("list.auto") : ex.customer.name)),
-      doc.created_by && t("ed.meta_uploaded", { name: doc.created_by.name, time: fmtTime(doc.created_at) }),
+      doc.source === "auto" ? t("ed.meta_auto", { from: (doc.email && doc.email.from) || "–", time: fmtTime(doc.created_at) })
+        : doc.created_by && t("ed.meta_uploaded", { name: doc.created_by.name, time: fmtTime(doc.created_at) }),
       doc.last_exported_at && t("ed.meta_exported", { time: fmtTime(doc.last_exported_at) }),
       doc.expires_at && t("ed.meta_expires", { date: fmtDate(doc.expires_at) })].filter(Boolean).join(" · ");
   }
@@ -420,7 +421,9 @@
   // ───────────── history ─────────────
   const finalNote = (d) => (d.final ? t("toast.final") : "");
   const ACTIONS = {
-    "document.created": (d) => t("act.document.created", { files: (d.files || []).join(t("list.sep")) }),
+    "document.created": (d) => d.source === "auto"
+      ? t("act.document.received", { files: (d.files || []).join(t("list.sep")), from: d.email_from || "–", subject: d.email_subject || "–" })
+      : t("act.document.created", { files: (d.files || []).join(t("list.sep")) }),
     "conversion.succeeded": (d) => t("act.conversion.succeeded", { lines: d.lines, customer: d.customer }),
     "conversion.failed": (d) => t("act.conversion.failed", { error: d.error }),
     "conversion.retried": (d) => t("act.conversion.retried", { customer: d.customer ? t("act.customer", { customer: d.customer }) : "" }),

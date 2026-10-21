@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, MetaData, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, MetaData, String, Text, UniqueConstraint
 from sqlalchemy.dialects import mysql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -20,6 +20,8 @@ from .db import utcnow
 #                         processing -> failed -> processing (retry)
 PROCESSING, EDITING, CONFIRMED, FAILED = "processing", "editing", "confirmed", "failed"
 STATUSES = (PROCESSING, EDITING, CONFIRMED, FAILED)
+# where a document came from: uploaded on the page by an OP, or an e-mail attachment passed on by Power Automate Cloud
+MANUAL, AUTO = "manual", "auto"
 
 
 def new_id() -> str:
@@ -70,6 +72,24 @@ class UserSession(Base):
     user: Mapped[User] = relationship(lazy="joined")
 
 
+class IntakeMessage(Base):
+    """An e-mail passed on by Power Automate Cloud, and what became of each of its attachments."""
+
+    __tablename__ = "intake_messages"
+    __table_args__ = (UniqueConstraint("owner_id", "message_key"),)  # the same e-mail sent twice: received once
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)  # whose list its documents are in
+    message_key: Mapped[str] = mapped_column(String(64))  # SHA-256 of the e-mail's Internet message id
+    sender: Mapped[str | None] = mapped_column(String(255))
+    subject: Mapped[str | None] = mapped_column(String(500))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # in the mailbox
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)  # here
+    attachment_count: Mapped[int] = mapped_column(Integer, default=0)
+    civ_count: Mapped[int] = mapped_column(Integer, default=0)
+    attachments: Mapped[list[Any]] = mapped_column(default=list)  # [{name, size, decision, reason, document_id}]
+
+
 class Document(Base):
     """One uploaded invoice (one or several PDF parts) and its CargoWise sheet."""
 
@@ -96,8 +116,11 @@ class Document(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     export_count: Mapped[int] = mapped_column(Integer, default=0)
+    source: Mapped[str] = mapped_column(String(20), default=MANUAL, server_default=MANUAL)  # manual | auto
+    intake_id: Mapped[int | None] = mapped_column(ForeignKey("intake_messages.id", ondelete="SET NULL"), index=True)  # auto: the e-mail
 
     creator: Mapped[User] = relationship(foreign_keys=[created_by], lazy="joined")
+    intake: Mapped[IntakeMessage | None] = relationship(lazy="joined")
     files: Mapped[list[DocumentFile]] = relationship(
         back_populates="document", order_by="DocumentFile.position", cascade="all, delete-orphan"
     )

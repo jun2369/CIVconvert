@@ -181,6 +181,8 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 | POST | `/api/convert` | multipart 上传 `files`（PDF 或 Excel，可多个）、可选 `customer`、`merge`；默认直接返回 CSV 文件，`format=json` 返回 JSON |
 | POST | `/api/convert/json` | JSON（base64）进出，给 Power Automate 用；PDF 和 Excel 附件都处理，其他附件跳过 |
 | POST | `/api/preview` | multipart 上传**一张发票**的 PDF（可多个）、可选 `customer`；返回转换结果 + 页面图片、每行在页面上的位置、导出 Excel 的目标列 |
+| POST | `/api/intake/email?owner=<OP 邮箱>` | Power Automate Cloud 发来的邮件（`X-API-Key`）：挑出 CIV 附件，生成文档（见下面“Power Automate Cloud 自动接收邮件”） |
+| GET | `/api/intake/today` | 网页顶部的“今天接收了 N 封邮件……”（已登录用户自己的） |
 | | `/api/auth/*` | 登录（`login`）、退出（`logout`）、当前用户（`me`） |
 | | `/api/documents/*` | 文档：上传、列表 / 筛选、统计、列表里改发票号 / 客户名称、表格保存、导出、Confirm、重新编辑、重新转换、原始 PDF、预览、操作记录、版本（见 `civconvert/documents_api.py`） |
 
@@ -223,25 +225,32 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 `status`：`ok` = 全部校验通过；`review` = 已生成 CSV，但有需要人工确认的地方（见 `warnings` / `checks`）；
 `partial` / `error` = 部分/全部文件失败（见各 result 的 `error`）。
 
-## Power Automate Cloud 对接（后续）
+## Power Automate Cloud 自动接收邮件
 
-1. 触发器 **When a new email arrives (V3)**（Office 365 Outlook）：Include Attachments = Yes，
-   按需要设置 From / Subject 过滤
+Power Automate 收到符合条件的邮件后，把整封邮件（含附件）发给 CIV Converter。系统挑出其中的 CIV 附件，
+每个 CIV 生成一个文档，在后台转换，和手动上传完全一样，出现在指定 OP 的文档列表里（来源 = **自动 / Auto**）。
+手动拖拽上传照常可用（来源 = **手动 / Manual**）；自动接收出问题时，OP 仍可手动上传。
+
+1. 触发器 **When a new email arrives (V3)**（Office 365 Outlook）：Folder、From 等按需要设置；
+   **Include Attachments = Yes**，Only with Attachments = Yes
 2. **HTTP** 动作（Premium）：
-   - Method `POST`，URI `https://<Northflank 地址>/api/convert/json`
-   - Headers：`X-API-Key` = 你的 key，`Content-Type` = `application/json`
-   - Body：
-     ```
-     {
-       "sender": "@{triggerOutputs()?['body/from']}",
-       "files": @{triggerOutputs()?['body/attachments']}
-     }
-     ```
-     附件数组可以原样传入；签名图片等非 PDF 附件会被自动跳过。
-3. **Apply to each** `@{body('HTTP')?['results']}`：
-   - **Create file**（OneDrive / SharePoint）：File name = `@{items('Apply_to_each')?['filename']}`，
-     File content = `@{base64ToBinary(items('Apply_to_each')?['content_base64'])}`
-   - 条件 `status` 等于 `review` 时，再发一封邮件把 `warnings` 发给操作人员
+   - Method `POST`
+   - URI `https://<Northflank 地址>/api/intake/email?owner=<OP 的邮箱>`：文档放进这个 OP 的列表
+     （此人需要先用 Nimbus 账号登录过一次 CIV Converter）
+   - Headers：`X-API-Key` = 服务器环境变量 `API_KEY` 里的一个 key；`Content-Type` = `application/json`
+   - Body：表达式 `triggerBody()`，整封邮件原样发送（Outlook 各版本触发器的字段名都认）
+3. 返回 JSON：`status` = `ok`（生成了文档）/ `no_civ`（没有找到 CIV：已记录，网页顶部会提示）/
+   `duplicate`（同一封邮件之前收过，例如 Power Automate 重试：不会重复生成）；`attachments` 是每个附件的结果和原因。
+   出错时（key 不对、owner 不存在、没带附件内容……）返回 4xx 和 `error` 说明，Power Automate 的运行记录里能看到
+
+**哪个附件是 CIV**（`civconvert/intake.py`）：只看 PDF / Excel（图片、签名、Word 等跳过）；再按内容判断：
+有 “Commercial Invoice”、价格 / 金额、HS 编码的算；装箱单、提单、AWB、Proforma 等不算；
+邮件里只有一个 PDF / Excel 且有发票迹象的也算；同一张发票同时附了 PDF 和 Excel 只转换一次（用 PDF）。
+
+**网页**：列表多了“来源”列；收到过自动邮件的用户，顶部显示“今天通过 Power Automate Cloud 接收了 N 封邮件、M 个附件……”，
+点“查看”能看到每封邮件、每个附件的处理结果。每封邮件都记录在数据库（`intake_messages`），和文档一样保留 4 个月。
+
+`/api/convert/json` 仍可用：直接返回 CSV，不生成文档。
 
 ## 部署到 Northflank
 
@@ -299,6 +308,7 @@ Docker 镜像里设置了 `REQUIRE_DATABASE_URL=1`：没有设置 `DATABASE_URL`
 civconvert/            代码
   extract.py             PDF 表格读取（pdfplumber，按客户配置）
   generic.py             通用读取：任何供应商的 PDF / Excel，自动找明细表
+  intake.py              Power Automate Cloud 发来的邮件：挑出 CIV 附件，生成“自动”文档
   sources.py             文件类型（PDF / xlsx / xls）、读 Excel
   transforms.py          字段转换（strip_chinese 等）
   pipeline.py            主流程 + 校验

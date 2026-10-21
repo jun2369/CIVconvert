@@ -26,9 +26,11 @@ from . import sheet as sheets
 from .db import as_utc, iso, session_scope, utcnow
 from .errors import AppError
 from .models import (
+    AUTO,
     CONFIRMED,
     EDITING,
     FAILED,
+    MANUAL,
     PROCESSING,
     STATUSES,
     AuditLog,
@@ -37,6 +39,7 @@ from .models import (
     DocumentExtraction,
     DocumentFile,
     DocumentSheet,
+    IntakeMessage,
     SheetVersion,
     User,
 )
@@ -80,14 +83,17 @@ def check_upload(files: list[InputFile]) -> None:
             raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF or Excel file", {"name": f.name})
 
 
-def create_document(db: Session, user: User, files: list[InputFile], customer: str | None) -> Document:
-    """The uploaded invoice (PDF or Excel) becomes a document; the conversion runs in the background."""
+def create_document(db: Session, user: User, files: list[InputFile], customer: str | None,
+                    intake: IntakeMessage | None = None) -> Document:
+    """The uploaded invoice (PDF or Excel) becomes a document; the conversion runs in the background.
+    `intake`: the e-mail it came from (Power Automate Cloud) – the document is then "auto" and in `user`'s list."""
     check_upload(files)
     [f] = files
     now = utcnow()
     doc = Document(
         name=_stem(f.name)[:255], status=PROCESSING, options={"customer": customer},
         created_by=user.id, created_at=now, updated_by=user.id, updated_at=now,
+        source=AUTO if intake else MANUAL, intake_id=intake.id if intake else None,
     )
     db.add(doc)
     db.flush()
@@ -95,7 +101,10 @@ def create_document(db: Session, user: User, files: list[InputFile], customer: s
     row = DocumentFile(document_id=doc.id, position=0, filename=f.name[:255], content_type=content_type, created_at=now)
     storage.put(row, f.data)
     db.add(row)
-    audit(db, "document.created", user.id, doc, files=[f.name], customer=customer)
+    if intake:  # no person did it: received by e-mail
+        audit(db, "document.created", None, doc, files=[f.name], customer=customer, source=AUTO, email_from=intake.sender, email_subject=intake.subject)
+    else:
+        audit(db, "document.created", user.id, doc, files=[f.name], customer=customer)
     db.commit()
     jobs.submit(process, doc.id)
     return doc
@@ -457,6 +466,10 @@ def purge_expired(db: Session, now: datetime | None = None) -> int:
     if ids:
         audit(db, "documents.purged", None, None, count=len(ids), uploaded_before=iso(cutoff))
         log.info("deleted %d document(s) uploaded before %s (kept %d months)", len(ids), iso(cutoff), months)
+    # the e-mails received by Power Automate Cloud are kept as long as the documents
+    emails = db.execute(delete(IntakeMessage).where(IntakeMessage.created_at < cutoff)).rowcount or 0
+    if emails:
+        log.info("deleted %d received e-mail record(s) from before %s", emails, iso(cutoff))
     db.commit()
     return len(ids)
 
@@ -476,6 +489,9 @@ def doc_json(doc: Document) -> dict[str, Any]:
         "invoice_date": doc.invoice_date,
         "customer_id": doc.customer_id,
         "customer_name": doc.customer_name,
+        "source": doc.source or MANUAL,
+        "email": {"from": doc.intake.sender, "subject": doc.intake.subject, "received_at": iso(doc.intake.received_at or doc.intake.created_at)}
+        if doc.intake else None,
         "status": doc.status,
         "needs_review": doc.needs_review,
         "error": doc.error,

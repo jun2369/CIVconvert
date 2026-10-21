@@ -91,6 +91,15 @@ def problem_invoice(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
     return invoice_pdf(lines, ["Subtotal :", "", str(qty_total), "", f"US${amount_total:,}.00", ""], seller=seller)
 
 
+def packing_list_pdf(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
+    """The packing list that comes with problem_invoice(): it names the invoice, but has no prices."""
+    ops = ["0.5 w", _text(200, 800, seller, 14), _text(250, 780, "PACKING LIST", 12),
+           _text(28, 750, "Invoice No. : T-0001"), _text(330, 750, "Date :2026-10-01")]
+    ops += _table([["Model", "Description", "Cartons", "Qty", "N.W. (kg)", "G.W. (kg)"],
+                   *[[f"CINSM{n:03d}", f"Test Product {n}", "1", str(n), "1.20", "1.50"] for n in range(1, 6)]], 730.0)
+    return _document(["\n".join(ops).encode("latin-1")])
+
+
 # ── another supplier: no ruling lines, like many ERP printouts ──
 # (x of each column's left edge; numbers end under the right end of their header)
 TEXT_HEADER = [("PO#", 17), ("Item#", 128), ("Description", 213), ("HTS", 368), ("HTS Description", 446),
