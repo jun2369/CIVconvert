@@ -50,7 +50,8 @@
     $("#title").textContent = doc.name;
     $("#badges").replaceChildren(...statusBadges(doc));
     const ex = detail.extraction || {};
-    $("#meta").textContent = [doc.invoice_no && t("ed.meta_invoice", { no: doc.invoice_no }), doc.invoice_date, ex.customer && (ex.customer.id === "auto" ? t("list.auto") : ex.customer.name),
+    $("#meta").textContent = [doc.invoice_no && t("ed.meta_invoice", { no: doc.invoice_no }), doc.invoice_date,
+      doc.customer_name || (ex.customer && (ex.customer.id === "auto" ? t("list.auto") : ex.customer.name)),
       doc.created_by && t("ed.meta_uploaded", { name: doc.created_by.name, time: fmtTime(doc.created_at) }),
       doc.last_exported_at && t("ed.meta_exported", { time: fmtTime(doc.last_exported_at) }),
       doc.expires_at && t("ed.meta_expires", { date: fmtDate(doc.expires_at) })].filter(Boolean).join(" · ");
@@ -432,6 +433,10 @@
     "document.exported": (d) => t("act.document.exported", { fmt: String(d.format).toUpperCase(), rev: d.revision, final: finalNote(d) }),
     "document.confirmed": (d) => t("act.document.confirmed", { rev: d.revision, issues: d.open_issues ? t("act.open_issues", { n: d.open_issues }) : "" }),
     "document.reopened": () => t("act.document.reopened"),
+    "document.edited": (d) => t("act.document.edited", {
+      changes: ["invoice_no", "customer_name"].filter((f) => d[f])
+        .map((f) => t("act.field." + f, { from: d[f].from || "–", to: d[f].to || "–" })).join(t("list.sep")),
+    }),
   };
   const reasonLabel = (r) => (CIVi18n.has("hist.reason." + r) ? t("hist.reason." + r) : r);
 

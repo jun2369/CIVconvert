@@ -17,7 +17,6 @@
   .stat .l { color: var(--muted); font-size: 13px; }
   .stat.warn .n { color: var(--warn); } .stat.err .n { color: var(--err); } .stat.ok .n { color: var(--ok); } .stat.info .n { color: var(--accent); }
 
-  .upload { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; align-items: start; }
   .drop { border: 1px dashed var(--line-strong); border-radius: 8px; background: var(--head); padding: 18px 16px; text-align: center; color: var(--muted); transition: border-color .15s, background .15s; }
   .drop:hover { border-color: var(--accent); }
   .drop.over { border-color: var(--accent); background: var(--accent-soft); }
@@ -26,7 +25,6 @@
   ul.files li { display: flex; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 14px; overflow-wrap: anywhere; }
   .uploadbar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; margin-top: 12px; }
   .check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
-  select#customer { width: 100%; }
 
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
   .filters input[type=search] { min-width: 240px; flex: 1 1 240px; }
@@ -47,7 +45,13 @@
   .empty { padding: 36px 16px; text-align: center; color: var(--muted); }
   .pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
   .err-line { color: var(--err); font-size: 12px; white-space: normal; max-width: 360px; }
-  @media (max-width: 760px) { .upload { grid-template-columns: 1fr; } }
+  /* invoice number / customer: click to change, saved at once */
+  .cell-edit { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; margin: -4px -7px; padding: 3px 6px; border: 1px solid transparent; border-radius: 5px; background: none; font: inherit; color: inherit; text-align: left; cursor: text; }
+  .cell-edit span:first-child { overflow: hidden; text-overflow: ellipsis; }
+  .cell-edit .pen { color: var(--muted); font-size: 12px; opacity: 0; transition: opacity .15s; }
+  .cell-edit:hover, .cell-edit:focus-visible { border-color: var(--line-strong); background: var(--field); outline: none; }
+  .cell-edit:hover .pen, .cell-edit:focus-visible .pen, tr:hover .cell-edit .pen { opacity: 1; }
+  input.cell-input { width: 100%; min-width: 16ch; margin: -5px -7px; padding: 4px 6px; font: inherit; }
 </style>
 </head>
 <body>
@@ -60,9 +64,6 @@
   <section class="panel">
     <h2 data-i18n="upload.heading">Upload Commercial Invoice</h2>
     <div class="upload">
-      <label class="field"><span data-i18n="upload.customer">Customer</span>
-        <select id="customer"><option value="" data-i18n="upload.auto">Detect automatically (from the PDF)</option></select>
-      </label>
       <div>
         <div class="drop" id="drop">
           <strong data-i18n="upload.drop">Drop a PDF or Excel file here</strong> <span data-i18n="upload.or">or</span>

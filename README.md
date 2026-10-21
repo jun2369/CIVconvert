@@ -182,7 +182,7 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 | POST | `/api/convert/json` | JSON（base64）进出，给 Power Automate 用；PDF 和 Excel 附件都处理，其他附件跳过 |
 | POST | `/api/preview` | multipart 上传**一张发票**的 PDF（可多个）、可选 `customer`；返回转换结果 + 页面图片、每行在页面上的位置、导出 Excel 的目标列 |
 | | `/api/auth/*` | 登录（`login`）、退出（`logout`）、当前用户（`me`） |
-| | `/api/documents/*` | 文档：上传、列表 / 筛选、统计、表格保存、导出、Confirm、重新编辑、重新转换、原始 PDF、预览、操作记录、版本（见 `civconvert/documents_api.py`） |
+| | `/api/documents/*` | 文档：上传、列表 / 筛选、统计、列表里改发票号 / 客户名称、表格保存、导出、Confirm、重新编辑、重新转换、原始 PDF、预览、操作记录、版本（见 `civconvert/documents_api.py`） |
 
 转换结果 JSON 里的 `flags` 是按行、按单元格定位的问题（`line`、`level`、`fields` = PDF 字段、`columns` = 模板列字母）。
 `flags`、`checks` 和错误回应都有英文 `message` / `detail` / `error`，另外带 `code` + `params`（网页用来显示中文 / 英文）。

@@ -4,6 +4,7 @@
     GET  /api/documents                  list: status, q, created_from/to, page
     GET  /api/documents/stats            dashboard counts
     GET  /api/documents/{id}             document, template columns, sheet, extraction, exports
+    PATCH /api/documents/{id}            the invoice number / customer name shown in the list
     PUT  /api/documents/{id}/sheet       save the sheet {revision, rows, reason}
     POST /api/documents/{id}/export      CSV (or format=xlsx) of the saved sheet, recorded
     POST /api/documents/{id}/confirm     editing -> confirmed
@@ -98,6 +99,18 @@ class SheetIn(BaseModel):
 def save_sheet(doc_id: str, body: SheetIn, user: CurrentUser, db: DB) -> dict[str, Any]:
     doc = docs.get_document(db, doc_id, user)
     return docs.save_sheet(db, doc, user, body.rows, body.revision, body.reason, body.force)
+
+
+class DetailsIn(BaseModel):
+    invoice_no: str | None = Field(default=None, max_length=1000)
+    customer_name: str | None = Field(default=None, max_length=1000)
+
+
+@router.patch("/{doc_id}")
+def edit_details(doc_id: str, body: DetailsIn, user: CurrentUser, db: DB) -> dict[str, Any]:
+    """Only the fields that are sent change; null or "" clears one."""
+    changes = {f: getattr(body, f) for f in body.model_fields_set}
+    return {"document": docs.doc_json(docs.update_details(db, docs.get_document(db, doc_id, user), user, changes))}
 
 
 @router.post("/{doc_id}/export")

@@ -347,6 +347,29 @@ def reopen(db: Session, doc: Document, user: User) -> Document:
     return doc
 
 
+DETAILS = {"invoice_no": 100, "customer_name": 255}  # what the user may change in the list, and its longest length
+
+
+def update_details(db: Session, doc: Document, user: User, changes: dict[str, str | None]) -> Document:
+    """The invoice number and the customer name shown in the list, as the user writes them (empty = none;
+    an empty customer name shows the detected customer again). The sheet and the export do not change."""
+    if doc.status not in (EDITING, CONFIRMED):
+        raise DocumentError(409, "details_not_editable", "The invoice number and customer can be changed once the invoice is converted")
+    changed = {}
+    for field, value in changes.items():
+        value = " ".join((value or "").split()) or None
+        if value and len(value) > DETAILS[field]:
+            raise DocumentError(400, "detail_too_long", f"At most {DETAILS[field]} characters", {"max": DETAILS[field]})
+        if value != getattr(doc, field):
+            changed[field] = {"from": getattr(doc, field), "to": value}
+            setattr(doc, field, value)
+    if changed:
+        doc.updated_at, doc.updated_by = utcnow(), user.id
+        audit(db, "document.edited", user.id, doc, **changed)
+        db.commit()
+    return doc
+
+
 # ───────────────────────────── lists & dashboard ─────────────────────────────
 
 
@@ -452,6 +475,7 @@ def doc_json(doc: Document) -> dict[str, Any]:
         "invoice_no": doc.invoice_no,
         "invoice_date": doc.invoice_date,
         "customer_id": doc.customer_id,
+        "customer_name": doc.customer_name,
         "status": doc.status,
         "needs_review": doc.needs_review,
         "error": doc.error,
@@ -529,11 +553,17 @@ def preview_payload(db: Session, doc: Document) -> dict[str, Any]:
         s = row.get("src")
         return s if isinstance(s, int) and 1 <= s <= len(src_lines) else None
 
+    document = dict(ex.get("document") or {})  # the invoice number as it is now (it may have been changed in the list)
+    if not doc.invoice_no:
+        document.pop("invoice_no", None)
+    elif doc.invoice_no != (document.get("invoice_no") or "")[:100]:
+        document["invoice_no"] = doc.invoice_no
+    customer = ex.get("customer") or {"id": doc.customer_id, "name": doc.customer_id}
     result = {
         "status": "review" if doc.needs_review else "ok",
         "filename": doc.name,
-        "customer": ex.get("customer") or {"id": doc.customer_id, "name": doc.customer_id},
-        "document": ex.get("document") or {},
+        "customer": {**customer, "label": doc.customer_name} if doc.customer_name else customer,
+        "document": document,
         "sources": [f.filename for f in doc.files],
         "checks": ex.get("checks") or [],
         "warnings": [],

@@ -80,7 +80,8 @@ class Document(Base):
     name: Mapped[str] = mapped_column(String(255))
     invoice_no: Mapped[str | None] = mapped_column(String(100), index=True)
     invoice_date: Mapped[str | None] = mapped_column(String(40))
-    customer_id: Mapped[str | None] = mapped_column(String(100))
+    customer_id: Mapped[str | None] = mapped_column(String(100))  # the profile it was converted with
+    customer_name: Mapped[str | None] = mapped_column(String(255))  # the customer as the user named it in the list
     template_id: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20), default=PROCESSING, index=True)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False)

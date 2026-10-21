@@ -163,6 +163,33 @@ def test_preview_follows_the_sheet_rows(user_client):
     assert [p["page"] for p in pv["preview"]["pages"]] == [1, 2]
 
 
+def test_invoice_number_and_customer_can_be_changed_in_the_list(user_client):
+    doc = upload(user_client, "problem invoice.pdf", problem_invoice())
+    url = f"/api/documents/{doc['id']}"
+    csv_before = user_client.post(url + "/export?format=csv").content
+    res = user_client.patch(url, json={"invoice_no": "  INV-2026/77 ", "customer_name": "iStone Innovation"})
+    assert res.status_code == 200, res.text
+    d = res.json()["document"]
+    assert (d["invoice_no"], d["customer_name"], d["customer_id"]) == ("INV-2026/77", "iStone Innovation", "istone")  # the profile stays
+    assert [x["id"] for x in user_client.get("/api/documents", params={"q": "2026/77"}).json()["items"]] == [doc["id"]]
+    pv = user_client.get(url + "/preview").json()["result"]
+    assert pv["document"]["invoice_no"] == "INV-2026/77" and pv["customer"]["label"] == "iStone Innovation"
+    assert user_client.post(url + "/export?format=csv").content == csv_before  # the sheet and the CSV do not change
+    # only what is sent changes; empty clears it (the list shows the detected customer again)
+    d = user_client.patch(url, json={"customer_name": ""}).json()["document"]
+    assert (d["invoice_no"], d["customer_name"]) == ("INV-2026/77", None)
+    edits = [e["detail"] for e in user_client.get(url + "/log").json()["log"] if e["action"] == "document.edited"]
+    assert edits == [{"customer_name": {"from": "iStone Innovation", "to": None}},
+                     {"invoice_no": {"from": doc["invoice_no"], "to": "INV-2026/77"}, "customer_name": {"from": None, "to": "iStone Innovation"}}]
+    res = user_client.patch(url, json={"invoice_no": "9" * 101})
+    assert res.status_code == 400 and res.json()["code"] == "detail_too_long" and res.json()["params"] == {"max": 100}
+    user_client.post(url + "/confirm", json={})  # a completed document too
+    assert user_client.patch(url, json={"invoice_no": "INV-2026/78"}).json()["document"]["invoice_no"] == "INV-2026/78"
+    failed = upload(user_client, "wrong customer.pdf", problem_invoice(), customer="nobody")  # not before it is converted
+    res = user_client.patch(f"/api/documents/{failed['id']}", json={"invoice_no": "X-1"})
+    assert res.status_code == 409 and res.json()["code"] == "details_not_editable"
+
+
 def test_original_pdf_is_kept(user_client):
     data = problem_invoice()
     doc = upload(user_client, "problem invoice.pdf", data)
@@ -193,6 +220,7 @@ def test_everyone_only_sees_their_own_documents(app_client):
         assert res.status_code == 404 and res.json()["code"] == "not_found", (path, res.text)
     res = app_client.put(f"/api/documents/{a['id']}/sheet", json={"revision": 1, "rows": []})
     assert res.status_code == 404
+    assert app_client.patch(f"/api/documents/{a['id']}", json={"invoice_no": "mine now"}).status_code == 404
 
     login(app_client, "op.one@agslogistics.com")
     assert sorted(names()) == ["problem invoice", "unknown seller"]

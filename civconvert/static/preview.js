@@ -197,7 +197,7 @@
 
     const r = S.result;
     S.title.replaceChildren(r.filename + "  ", el("span", { class: "badge " + (r.status === "ok" ? "ok" : "review"), text: L(r.status === "ok" ? "pv.badge_ok" : "pv.badge_review") }));
-    S.meta.textContent = [r.customer.id === "auto" ? L("list.auto") : r.customer.name, r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
+    S.meta.textContent = [r.customer.label || (r.customer.id === "auto" ? L("list.auto") : r.customer.name), r.document.invoice_no && L("pv.invoice", { no: r.document.invoice_no }), r.document.invoice_date,
       L("pv.rows", { n: S.n }), r.sources.join(" + ")].filter(Boolean).join(" · ");
 
     S.src = makePane("src");

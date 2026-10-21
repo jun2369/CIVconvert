@@ -5,8 +5,8 @@
   const { t } = CIVi18n;
   const files = [];
   const state = { status: "", q: "", from: "", to: "", page: 1, pageSize: 25 };
-  let customers = [];
   let timer = null;
+  let editing = 0; // an invoice number / customer being typed: the list is not reloaded under it
 
   // ───────────── filters live in the URL, so refresh / back keep them ─────────────
   function readUrl() {
@@ -96,12 +96,17 @@
     const name = el("td", { class: "name" }, el("b", { text: d.name }),
       el("span", { class: "hint", text: [d.invoice_no && t("row.invoice", { no: d.invoice_no }), d.files.length > 1 && t("row.pdfs", { n: d.files.length })].filter(Boolean).join(" · ") }));
     if (d.status === "failed" && d.error) name.append(el("span", { class: "err-line", text: d.error }));
+    const auto = d.customer_id === "auto";
     return el("tr", { onclick: open, title: t("row.open_tip") },
       name,
-      el("td", { text: d.invoice_no || "–" }),
+      detail(d, "invoice_no", { shown: d.invoice_no, start: d.invoice_no }, "row.edit_invoice", 100),
       el("td", {}, ...statusBadges(d)),
       el("td", { class: "num", text: ready ? String(d.line_count) : "–" }),
-      el("td", { text: d.customer_id === "auto" ? t("list.auto") : d.customer_id || "–" }),
+      detail(d, "customer_name", {
+        shown: d.customer_name || (auto ? t("list.auto") : d.customer_id), // empty: the detected customer
+        start: d.customer_name || (auto ? "" : d.customer_id),
+        placeholder: auto ? t("list.auto") : d.customer_id,
+      }, "row.edit_customer", 255),
       el("td", { text: d.created_by ? d.created_by.name : "" }),
       el("td", { text: fmtTime(d.created_at) }),
       el("td", { text: fmtTime(d.updated_at) }),
@@ -110,6 +115,48 @@
         : el("span", { class: "hint", text: t("row.not_exported") })),
       el("td", {}, acts),
     );
+  }
+
+  /** A cell the user can change (invoice number, customer): click, type, Enter or click elsewhere saves, Esc cancels.
+   *  shown: the text in the cell; start: the text to edit; placeholder: what an empty value means. */
+  function detail(d, field, { shown, start, placeholder }, tip, max) {
+    const td = el("td");
+    if (d.status !== "editing" && d.status !== "confirmed") { td.textContent = shown || "–"; return td; }
+    const view = () => td.replaceChildren(el("button", { type: "button", class: "cell-edit", title: t(tip), "aria-label": t(tip),
+      onclick: (e) => { e.stopPropagation(); edit(); } }, el("span", { text: shown || "–" }), el("span", { class: "pen", "aria-hidden": "true", text: "✎" })));
+    const edit = () => {
+      const before = start || "";
+      const input = el("input", { type: "text", class: "cell-input", value: before, maxlength: String(max), placeholder, "aria-label": t(tip) });
+      let done = false;
+      const finish = async (save) => {
+        if (done) return;
+        done = true;
+        editing--;
+        const value = input.value.trim();
+        if (!save || value === before) { view(); return; }
+        input.disabled = true;
+        try {
+          const { document } = await api(`/api/documents/${d.id}`, { method: "PATCH", json: { [field]: value || null } });
+          td.closest("tr").replaceWith(row(document)); // the new value, "Last modified" – the row stays where it is
+          toast(t("toast.detail_saved"));
+        } catch (e) {
+          toast(t("toast.detail_failed", { error: e.message }), "err");
+          view();
+        }
+      };
+      input.onclick = (e) => e.stopPropagation();
+      input.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); finish(true); }
+        else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+      };
+      input.onblur = () => finish(true);
+      editing++;
+      td.replaceChildren(input);
+      input.focus();
+      input.select();
+    };
+    view();
+    return td;
   }
 
   async function exportCsv(d) {
@@ -149,6 +196,11 @@
 
   async function refresh() {
     writeUrl();
+    if (editing) { // not under a cell being typed in: later
+      clearTimeout(timer);
+      timer = setTimeout(refresh, 2000);
+      return;
+    }
     try {
       await Promise.all([loadStats(), loadList()]);
     } catch (e) {
@@ -172,8 +224,7 @@
   }
   async function upload() {
     const fd = new FormData();
-    for (const f of files) fd.append("files", f, f.name);
-    if ($("#customer").value) fd.append("customer", $("#customer").value);
+    for (const f of files) fd.append("files", f, f.name); // the customer is always detected
     $("#go").disabled = true;
     $("#upStatus").replaceChildren(el("span", { class: "spin" }), " " + t("upload.uploading"));
     try {
@@ -197,9 +248,6 @@
   drop.addEventListener("dragleave", () => drop.classList.remove("over"));
   drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); });
   $("#go").onclick = upload;
-  $("#customer").onchange = (e) => {
-    try { localStorage.setItem("civconvert.customer", e.target.value); } catch { /* private mode */ }
-  };
   let typing;
   $("#q").addEventListener("input", (e) => { clearTimeout(typing); typing = setTimeout(() => { state.q = e.target.value; state.page = 1; refresh(); }, 300); });
   $("#status").onchange = (e) => { state.status = e.target.value; state.page = 1; refresh(); };
@@ -220,11 +268,6 @@
       CIV.topbar(user);
       const hour = new Date().getHours();
       $("#greeting").textContent = t(hour < 12 ? "dash.morning" : hour < 18 ? "dash.afternoon" : "dash.evening", { name: user.name });
-      customers = await api("/api/customers");
-      const sel = $("#customer");
-      for (const c of customers) sel.append(el("option", { value: c.id, text: `${c.name} (${c.id})` }));
-      try { sel.value = localStorage.getItem("civconvert.customer") || ""; } catch { /* private mode */ }
-      if (sel.selectedIndex < 0) sel.value = "";
       const info = await api("/api/info");
       if (info.retention_months) $("#retention").textContent = t("list.retention", { months: info.retention_months });
     } catch (e) {
