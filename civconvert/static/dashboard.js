@@ -299,7 +299,7 @@
     if (!list.length) return;
     if (list.length > 1) { toast(t("upload.one_only"), "err"); return; } // one invoice PDF per upload
     const f = list[0];
-    if (!/\.(pdf|xlsx|xlsm|xls)$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); return; }
+    if (!/\.(pdf|xlsx|xlsm|xls|png|jpe?g|tiff?|bmp|gif|webp|heic|heif|avif)$/i.test(f.name)) { toast(t("upload.not_pdf", { name: f.name }), "err"); return; }
     files.splice(0, files.length, f); // a new choice replaces the previous one
     renderFiles();
   }

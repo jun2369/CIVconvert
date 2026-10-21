@@ -80,7 +80,7 @@ def check_upload(files: list[InputFile]) -> None:
         if len(f.data) > MAX_FILE_MB * 1024 * 1024:
             raise DocumentError(422, "file_too_large", f"{f.name}: larger than {MAX_FILE_MB} MB", {"name": f.name, "mb": MAX_FILE_MB})
         if sources.kind(f.name, f.data) is None:
-            raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF or Excel file", {"name": f.name})
+            raise DocumentError(422, "not_pdf", f"{f.name}: not a PDF, Excel or picture file", {"name": f.name})
 
 
 def create_document(db: Session, user: User, files: list[InputFile], customer: str | None,
@@ -97,7 +97,7 @@ def create_document(db: Session, user: User, files: list[InputFile], customer: s
     )
     db.add(doc)
     db.flush()
-    content_type = sources.CONTENT_TYPES[sources.kind(f.name, f.data) or sources.PDF]
+    content_type = sources.content_type(f.name, f.data)
     row = DocumentFile(document_id=doc.id, position=0, filename=f.name[:255], content_type=content_type, created_at=now)
     storage.put(row, f.data)
     db.add(row)

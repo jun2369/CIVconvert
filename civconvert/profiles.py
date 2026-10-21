@@ -45,6 +45,7 @@ class TableSpec:
     continuation_anchor: str | None
     continuation_fields: list[str]
     pdfplumber: dict[str, Any]
+    numeric_totals: bool = False  # general reader: a row of only the sums, without a "Total" label, is the totals row
 
 
 @dataclass

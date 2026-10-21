@@ -9,7 +9,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+# OCR needs OpenCV without a screen: its headless build, which needs no X11 / OpenGL libraries in the slim image
+RUN pip install -r requirements.txt \
+ && pip uninstall -y opencv-python \
+ && pip install opencv-python-headless==5.0.0.93
 
 COPY civconvert ./civconvert
 COPY config ./config

@@ -3,20 +3,31 @@
 Columns are located by their header text (Model, Description, HS Code, ...), so the
 result does not depend on column positions or on an external PDF-to-Excel converter.
 Where each row sits on the page is kept as well, so the preview can point at it.
+A picture (PNG, JPG …) is opened as a PDF, and pages without text are read by OCR (ocr.py).
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import re
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field, replace
+from decimal import Decimal, InvalidOperation
 
 import pdfplumber
 
+from . import ocr, sources
 from .profiles import TableSpec
 
 _SPACES = re.compile(r"\s+")
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_AMOUNT = re.compile(r"^[-+(]?(?:[A-Za-z]{2,3})?[$€£¥]?\d[\d,]*(?:\.\d+)?\)?(?:[A-Za-z]{1,5})?$")  # 21,480.00 / USD21480 / 358PCS
+NUMBER_FIELDS = ("qty", "amount", "unit_price", "net_weight", "gross_weight")
+TEXT_FIELDS = ("model", "description", "hs_code", "origin")
+_picture_pdfs: OrderedDict[str, bytes] = OrderedDict()  # pictures opened lately, as PDFs
+_picture_lock = threading.Lock()
 _STRATEGIES = {
     "lines": {"vertical_strategy": "lines", "horizontal_strategy": "lines"},
     "text": {"vertical_strategy": "text", "horizontal_strategy": "text"},
@@ -66,6 +77,7 @@ class PdfExtract:
     notes: list[str] = field(default_factory=list)
     layout: dict | None = None  # Excel: the sheet as drawn for the preview (generic.read_excel)
     label_values: str = ""  # Excel: labels with their value in the cell below, as "label: value" lines
+    ocr_pages: list[int] = field(default_factory=list)  # pages read by OCR (a picture or a scan)
 
 
 def clean_cell(value: object) -> str:
@@ -84,16 +96,81 @@ def _row_box(page_no: int, row, index: dict[str, int]) -> RowBox:
     return RowBox(page_no, tuple(row.bbox), cells)
 
 
-def open_pdf(data: bytes, name: str):
+def _picture_as_pdf(data: bytes, name: str) -> bytes:
+    key = hashlib.sha1(data).hexdigest()
+    with _picture_lock:
+        if key in _picture_pdfs:
+            _picture_pdfs.move_to_end(key)
+            return _picture_pdfs[key]
     try:
-        return pdfplumber.open(io.BytesIO(data))
+        pdf_data, _ = sources.picture_pdf(data, name)
+    except sources.SourceError as e:
+        raise PdfError(str(e)) from e
+    with _picture_lock:
+        _picture_pdfs[key] = pdf_data
+        while len(_picture_pdfs) > 16:
+            _picture_pdfs.popitem(last=False)
+    return pdf_data
+
+
+def open_pdf(data: bytes, name: str, ocr_mode: str = ocr.AUTO, ocr_limit: int = ocr.MAX_PAGES):
+    """The PDF (pdfplumber) – a picture opened as a PDF (one page per picture page). Pages without text are
+    read by OCR as `ocr_mode` says (ocr.fill), at most `ocr_limit` of them. `pdf.ocr_pages`: the pages read
+    so; `pdf.unread_pages`: pictures of pages left without text (a PDF with text on other pages)."""
+    picture = sources.kind(name, data) == sources.IMAGE
+    try:
+        pdf = pdfplumber.open(io.BytesIO(_picture_as_pdf(data, name) if picture else data))
+    except PdfError:
+        raise
     except Exception as e:  # pdfminer raises many different exception types
         raise PdfError(f"{name}: cannot read the PDF ({e.__class__.__name__}: {e})") from e
+    pages = (lambda: sources.picture_pages(data, name)) if picture else None
+    pdf.ocr_pages, pdf.unread_pages = ocr.fill(pdf, data, pages, ocr_mode, ocr_limit)
+    return pdf
 
 
-def read_text(data: bytes, name: str) -> str:
-    with open_pdf(data, name) as pdf:
+def read_text(data: bytes, name: str, ocr_mode: str = ocr.AUTO) -> str:
+    with open_pdf(data, name, ocr_mode) as pdf:
         return "\n".join(page.extract_text() or "" for page in pdf.pages)
+
+
+def _decimal(text: str | None) -> Decimal | None:
+    digits = re.sub(r"[^\d.\-]", "", (text or "").replace(",", ""))
+    try:
+        return Decimal(digits) if re.search(r"\d", digits) else None
+    except InvalidOperation:
+        return None
+
+
+def unlabeled_totals(items: list[dict[str, str]], row: dict[str, str]) -> bool:
+    """A row without a "Total" label that is the table's totals row: numbers only, no product code /
+    description / HS code, and its quantity or amount is the sum of the lines above."""
+    if any(row.get(f) for f in TEXT_FIELDS):
+        return False
+    numbers = {f: row[f] for f in NUMBER_FIELDS if row.get(f)}
+    if not numbers or not all(_AMOUNT.match(v.replace(" ", "")) for v in numbers.values()):
+        return False
+    return any(_is_sum(items, f, numbers.get(f)) for f in ("qty", "amount"))
+
+
+def _is_sum(items: list[dict[str, str]], f: str, text: str | None) -> bool:
+    total = _decimal(text)
+    values = [_decimal(i.get(f)) for i in items]
+    return total is not None and bool(values) and None not in values and abs(sum(values, Decimal(0)) - total) <= Decimal("0.01")
+
+
+def place_sums(items: list[dict[str, str]], row: dict[str, str]) -> dict[str, str]:
+    """A totals row with its quantity / amount sum printed under another column ("358" under "Unit"):
+    a number there that is exactly the sum counts for the quantity / amount."""
+    out = dict(row)
+    for f in ("qty", "amount"):
+        if out.get(f):
+            continue
+        for other, text in row.items():
+            if other not in (*NUMBER_FIELDS, *TEXT_FIELDS) and not other.startswith("_") and _AMOUNT.match((text or "").replace(" ", "")) and _is_sum(items, f, text):
+                out[f] = text
+                break
+    return out
 
 
 def match_header(cells: list[str], spec: TableSpec) -> dict[str, int] | None:
@@ -116,7 +193,7 @@ def _is_continuation(item: dict[str, str], spec: TableSpec) -> bool:
 
 
 def extract(
-    data: bytes, name: str, spec: TableSpec, carry: ColumnMap | None = None
+    data: bytes, name: str, spec: TableSpec, carry: ColumnMap | None = None, ocr_mode: str = ocr.AUTO
 ) -> tuple[PdfExtract, ColumnMap | None]:
     """Line items of one PDF.
 
@@ -126,8 +203,9 @@ def extract(
     settings = {**_STRATEGIES[spec.strategy], **spec.pdfplumber}
     result = PdfExtract(name=name)
     colmap, done, texts = carry, False, []
-    with open_pdf(data, name) as pdf:
+    with open_pdf(data, name, ocr_mode) as pdf:
         result.page_count = len(pdf.pages)
+        result.ocr_pages = list(pdf.ocr_pages)
         for page_no, page in enumerate(pdf.pages, 1):
             texts.append(page.extract_text() or "")
             if done:
@@ -155,6 +233,10 @@ def extract(
                         break
                     item = {f: cells[i] for f, i in colmap.index.items()}
                     box = _row_box(page_no, row, colmap.index)
+                    if spec.numeric_totals and result.rows and result.rows[-1].page == page_no and unlabeled_totals(result.items, item):
+                        # the sums right under the lines (not a carried-forward amount at the top of the next page)
+                        result.totals, result.totals_row, done = place_sums(result.items, item), box, True
+                        break
                     if result.items and _is_continuation(item, spec):
                         prev = result.items[-1]
                         for f in spec.continuation_fields:

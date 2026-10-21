@@ -349,8 +349,8 @@
   $("#reopen").onclick = reopen;
   $("#preview").onclick = (e) => preview(e.currentTarget);
   $("#history").onclick = history;
-  const fileType = () => { // the original file's type on its button: PDF, XLSX …
-    const m = /\.(pdf|xlsx|xlsm|xls)$/i.exec((doc && doc.files[0] && doc.files[0].filename) || "");
+  const fileType = () => { // the original file's type on its button: PDF, XLSX, PNG …
+    const m = /\.(pdf|xlsx|xlsm|xls|png|jpe?g|tiff?|bmp|gif|webp|heic|heif|avif)$/i.exec((doc && doc.files[0] && doc.files[0].filename) || "");
     $("#pdf").textContent = m ? m[1].toUpperCase() : "PDF";
   };
   $("#pdf").onclick = (e) => {

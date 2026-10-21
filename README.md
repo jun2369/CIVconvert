@@ -1,11 +1,13 @@
-# CIVconvert — Commercial Invoice PDF / Excel → CargoWise CSV
+# CIVconvert — Commercial Invoice PDF / Excel / 图片 → CargoWise CSV
 
-把 Commercial Invoice（CIV，PDF 或 Excel）直接转换成 CargoWise 导入用的 CSV。
+把 Commercial Invoice（CIV，PDF、Excel 或图片 / 扫描件）直接转换成 CargoWise 导入用的 CSV。
 不再需要在线 PDF→Excel 工具，也不需要手工复制粘贴；任何供应商、任何版式都可以，不需要先为它写配置。
 
 ## 处理流程
 
-1. **读取 PDF 或 Excel**（`.pdf`、`.xlsx` / `.xlsm`、`.xls`）：按**表头文字**定位明细表格，结果是确定的。
+1. **读取 PDF、Excel 或图片**（`.pdf`、`.xlsx` / `.xlsm`、`.xls`；图片 `.png`、`.jpg` / `.jpeg`、`.tif` / `.tiff`（可多页）、`.bmp`、`.gif`、`.webp`、`.heic`（iPhone 照片））：按**表头文字**定位明细表格，结果是确定的。
+   - **图片和扫描件**（没有文字层的 PDF 页）先用 **OCR** 识别文字（`civconvert/ocr.py`：RapidOCR / PP-OCR 中英文模型，在服务器本机运行，不上传到任何外部服务），同时从图片里找出表格线；之后和普通 PDF 完全一样读取。小图（截图）会先放大再识别；盖在表格线上的印章不影响（被盖住的线会接上）。OCR 可能认错字，所以这样读出的发票一定标记“需复核”（检查项 “OCR 识别”），请对照左边的图片核对后再导出
+   - 合计行没有写 “Total”、只有数量 / 金额合计数的（很多中国供应商的发票这样），也认作合计行用于核对；数量合计写在别的列下面（例如 “Unit” 下）但正好等于合计时也算
    - 有客户配置的客户（目前 iStone）：按它的配置读，结果和以前完全一样
    - 其他任何供应商、任何版式：**通用读取**（`config/generic.yaml`）——按表头的常见写法找列：
      Model / Part No / Item# → 产品编号，Description → 品名，HS / HTS / Tariff → 税号，
@@ -139,7 +141,7 @@ CSV 的表头、列顺序、编码和换行与以前完全相同（未修改过�
 
 左边是保存的原始 PDF（Excel 发票则画出读取的那张工作表，带 Excel 的列字母和行号），
 右边是表格**当前**的数据（删除 / 插入行之后也能对上原来的行）。
-扫描件（没有文字层的 PDF）和图片目前不能转换，所以也不能预览（需要 OCR）。
+图片和扫描件的预览：左边显示原图，表格行的位置来自 OCR。
 
 ## 通用读取认不出某种表头时（不需要改代码）
 
@@ -243,7 +245,7 @@ Power Automate 收到符合条件的邮件后，把整封邮件（含附件）�
    `duplicate`（同一封邮件之前收过，例如 Power Automate 重试：不会重复生成）；`attachments` 是每个附件的结果和原因。
    出错时（key 不对、owner 不存在、没带附件内容……）返回 4xx 和 `error` 说明，Power Automate 的运行记录里能看到
 
-**哪个附件是 CIV**（`civconvert/intake.py`）：只看 PDF / Excel（图片、签名、Word 等跳过）；再按内容判断：
+**哪个附件是 CIV**（`civconvert/intake.py`）：只看 PDF / Excel（图片附件仍然跳过：邮件里的图片多是 logo、签名；扫描件 PDF 会用 OCR 读前 3 页来判断）；再按内容判断：
 有 “Commercial Invoice”、价格 / 金额、HS 编码的算；装箱单、提单、AWB、Proforma 等不算；
 邮件里只有一个 PDF / Excel 且有发票迹象的也算；同一张发票同时附了 PDF 和 Excel 只转换一次（用 PDF）。
 
@@ -307,7 +309,8 @@ Docker 镜像里设置了 `REQUIRE_DATABASE_URL=1`：没有设置 `DATABASE_URL`
 ```
 civconvert/            代码
   extract.py             PDF 表格读取（pdfplumber，按客户配置）
-  generic.py             通用读取：任何供应商的 PDF / Excel，自动找明细表
+  generic.py             通用读取：任何供应商的 PDF / Excel / 图片，自动找明细表
+  ocr.py                 图片和扫描件：OCR 识别文字、找表格线，交给 PDF 读取
   intake.py              Power Automate Cloud 发来的邮件：挑出 CIV 附件，生成“自动”文档
   sources.py             文件类型（PDF / xlsx / xls）、读 Excel
   transforms.py          字段转换（strip_chinese 等）

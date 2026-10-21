@@ -69,6 +69,35 @@ def _document(streams: list[bytes], width: int = 595, height: int = 842) -> byte
     return bytes(out)
 
 
+def mixed_pdf(pages: list[bytes | tuple[bytes, int, int]], width: int = 595, height: int = 842) -> bytes:
+    """Pages of text (content streams) and pictures: (JPEG data, pixel width, pixel height) – a scan filling the page."""
+    objs: list[bytes] = [b"<< /Type /Catalog /Pages 2 0 R >>", b"", b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"]
+    kids = []
+    for page in pages:
+        n = len(objs) + 1
+        kids.append(f"{n} 0 R")
+        if isinstance(page, bytes):
+            objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /Font << /F1 3 0 R >> >> /Contents {n + 1} 0 R >>".encode())
+            objs.append(b"<< /Length %d >>\nstream\n" % len(page) + page + b"\nendstream")
+        else:
+            jpeg, w, h = page
+            draw = f"q {width} 0 0 {height} 0 0 cm /Im0 Do Q".encode()
+            objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 {n + 2} 0 R >> >> /Contents {n + 1} 0 R >>".encode())
+            objs.append(b"<< /Length %d >>\nstream\n" % len(draw) + draw + b"\nendstream")
+            objs.append(f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {len(jpeg)} >>\nstream\n".encode() + jpeg + b"\nendstream")
+    objs[1] = f"<< /Type /Pages /Kids [{' '.join(kids)}] /Count {len(kids)} >>".encode()
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for n, body in enumerate(objs, 1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    xref = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1)
+    out += b"".join(b"%010d 00000 n \n" % o for o in offsets)
+    out += b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref)
+    return bytes(out)
+
+
 def problem_invoice(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
     """26 lines over 2 pages with known problems:
     line 3 / line 20: same model, different HS code · line 5: HS code format
@@ -97,6 +126,42 @@ def packing_list_pdf(seller: str = "ISTONE INNOVATION LIMITED") -> bytes:
            _text(28, 750, "Invoice No. : T-0001"), _text(330, 750, "Date :2026-10-01")]
     ops += _table([["Model", "Description", "Cartons", "Qty", "N.W. (kg)", "G.W. (kg)"],
                    *[[f"CINSM{n:03d}", f"Test Product {n}", "1", str(n), "1.20", "1.50"] for n in range(1, 6)]], 730.0)
+    return _document(["\n".join(ops).encode("latin-1")])
+
+
+# ── a supplier invoice with a ruled table: cells centred over two lines, a totals row without "Total" ──
+GRID_COLUMNS = [("No", 30), ("Item code", 62), ("Description", 140), ("Q'ty", 70), ("Unit", 42), ("Unite Price|(USD)", 64), ("Amount|(USD)", 70)]
+
+
+def _centred(x: float, width: float, y_mid: float, text: str, size: int = 8) -> list[str]:
+    """Text centred in a cell; "a|b" = two lines."""
+    parts = text.split("|")
+    out = []
+    for i, part in enumerate(parts):
+        y = y_mid - 3 + (len(parts) - 1) * 5 - i * 10
+        out.append(_text(x + (width - 0.5 * size * len(part)) / 2, y, part, size))
+    return out
+
+
+def grid_invoice_pdf(rows: list[list[str]] | None = None, totals: list[str] | None = None) -> bytes:
+    """Like a Chinese supplier's Commercial Invoice (made in Excel): no HS code column, "Unite Price" / "(USD)"
+    over two lines, a product name over two lines next to one-line cells, and a totals row of only the sums –
+    the total quantity under "Unit"."""
+    rows = rows or [["1", "Wire Mesh|Cage", "1200*1000*1200mm", "358", "(PCS)", "60", "21480"]]
+    totals = totals if totals is not None else ["", "", "", "", "358", "", "21480"]
+    ops = ["0.5 w", _text(150, 800, "Shenzhen Ali Intelligent Equipment Technology Co., Ltd.", 11),
+           _text(230, 760, "COMMERCIAL INVOICE", 13), _text(60, 730, "Name: Speed Xpress Inc"), _text(400, 730, "Invoice No: SPX-443"),
+           _text(400, 714, "Invoice Date.: Oct 8th,2026"), _text(60, 698, "Freight Terms: FOB Yantian Port, Shenzhen")]
+    top = 680.0
+    for cells, height in ([[c for c, _ in GRID_COLUMNS], 24.0], *[[r, 36.0] for r in rows], [totals, 16.0]):
+        x = 60.0
+        for (_, w), cell in zip(GRID_COLUMNS, cells):
+            ops.append(f"{x:.1f} {top - height:.1f} {w} {height} re S")
+            if cell:
+                ops += _centred(x, w, top - height / 2, cell)
+            x += w
+        top -= height
+    ops.append(_text(60, top - 14, "SAY US DOLLARS TWENTY-ONE THOUSAND FOUR HUNDRED AND EIGHTY ONLY."))
     return _document(["\n".join(ops).encode("latin-1")])
 
 

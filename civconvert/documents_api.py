@@ -1,6 +1,6 @@
 """HTTP API of the documents (logged-in users; everyone only sees and changes their own documents).
 
-    POST /api/documents                  upload PDF(s) -> documents (status processing)
+    POST /api/documents                  upload a PDF, Excel file or picture -> document (status processing)
     GET  /api/documents                  list: status, q, created_from/to, page
     GET  /api/documents/stats            dashboard counts
     POST /api/documents/delete           delete own documents for good {ids}
@@ -11,7 +11,7 @@
     POST /api/documents/{id}/confirm     editing -> confirmed
     POST /api/documents/{id}/reopen      confirmed -> editing
     POST /api/documents/{id}/retry       failed -> processing (convert again)
-    GET  /api/documents/{id}/files/{fid} original PDF
+    GET  /api/documents/{id}/files/{fid} the original file (PDF / picture shown in the browser, Excel downloaded)
     GET  /api/documents/{id}/preview     data for the side-by-side Preview
     GET  /api/documents/{id}/log         audit log;  GET .../versions: saved versions
 """
@@ -38,6 +38,8 @@ from .pipeline import InputFile
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 CurrentUser = Annotated[User, Depends(require_user)]
 DB = Annotated[Session, Depends(get_db)]
+# originals the browser shows itself (no SVG: it could carry scripts – and it is not accepted anyway)
+SHOWN_INLINE = {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp", "image/avif"}
 
 
 def _attachment(filename: str, inline: bool = False) -> dict[str, str]:
@@ -165,8 +167,8 @@ def original(doc_id: str, file_id: int, user: CurrentUser, db: DB) -> Response:
         data = storage.get(row)
     except storage.StorageError as e:
         raise docs.DocumentError(500, "storage_error", str(e), {"error": str(e)}) from e
-    pdf = (row.content_type or "application/pdf") == "application/pdf"  # an Excel file is downloaded
-    return Response(data, media_type=row.content_type or "application/pdf", headers=_attachment(row.filename, inline=pdf))
+    shown = (row.content_type or "application/pdf") in SHOWN_INLINE  # an Excel file (or a TIFF, HEIC …) is downloaded
+    return Response(data, media_type=row.content_type or "application/pdf", headers=_attachment(row.filename, inline=shown))
 
 
 @router.get("/{doc_id}/preview")

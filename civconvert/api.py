@@ -284,7 +284,7 @@ def convert_json(body: ConvertIn) -> dict[str, Any]:
             data = base64.b64decode(f.content, validate=False)
         except (binascii.Error, ValueError) as e:
             raise ConversionError(f"{f.name}: content is not valid base64") from e
-        if sources.kind(f.name, data):
+        if sources.kind(f.name, data) in (sources.PDF, sources.XLSX, sources.XLS):  # pictures: logos, signatures
             inputs.append(InputFile(f.name, data))
         else:
             skipped.append(f.name)

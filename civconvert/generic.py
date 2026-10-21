@@ -10,7 +10,9 @@ the one that looks most like the invoice's line items wins: HS codes and prices 
   - PDF tables without lines: every word goes to the column whose header it sits under (text starts
     under its header, numbers end under it); a line without an item number, HS code or numbers is
     wrapped text of the line above; the table may go on over the next pages, with or without
-    repeating its header; the last "Total" line is the one that is checked
+    repeating its header; the last "Total" line is the one that is checked – or a line of only the
+    sums of quantity / amount without a "Total" label
+  - pictures and scanned pages: read by OCR first (ocr.py), then as above
   - Excel: by the header row's cells (a header may be written over two rows: "Quantity" over "Pcs");
     a merged cell next to several rows (a product's code, description and HS code next to its size rows)
     counts for each of them; a repeated header row is skipped; the totals row may be a few empty rows
@@ -26,7 +28,7 @@ from typing import Any
 
 from openpyxl.utils import get_column_letter
 
-from . import extract, sources
+from . import extract, ocr, sources
 from .extract import Bbox, PdfExtract, RowBox
 from .profiles import CustomerProfile, GenericSpec, TableSpec
 
@@ -195,10 +197,12 @@ def _best(headers: list[Header]) -> Header | None:
     return max(headers, key=lambda h: (h.score, h.kind == "ruled", -h.page), default=None)
 
 
-def find_pdf_header(data: bytes, name: str, spec: GenericSpec) -> Header | None:
-    """The item-table header of a PDF: the best candidate of all pages (ruled tables and text lines)."""
+def find_pdf_header(data: bytes, name: str, spec: GenericSpec, ocr_mode: str = ocr.AUTO) -> tuple[Header | None, bool]:
+    """The item-table header of a PDF: the best candidate of all pages (ruled tables and text lines) – and
+    whether some pages are pictures that were not read (a PDF with text on its other pages)."""
     headers: list[Header] = []
-    with extract.open_pdf(data, name) as pdf:
+    with extract.open_pdf(data, name, ocr_mode) as pdf:
+        unread = bool(pdf.unread_pages)
         for page_no, page in enumerate(pdf.pages, 1):
             text = page.extract_text() or ""
             if not text.strip():
@@ -206,7 +210,7 @@ def find_pdf_header(data: bytes, name: str, spec: GenericSpec) -> Header | None:
             bonus = _context(text, spec)
             headers += _ruled_headers(page_no, page, spec, bonus)
             headers += _word_headers(page_no, _lines(page.extract_words()), spec, bonus)
-    return _best(headers)
+    return _best(headers), unread
 
 
 def _ruled_spec(header: Header, spec: GenericSpec) -> TableSpec:
@@ -222,22 +226,31 @@ def _ruled_spec(header: Header, spec: GenericSpec) -> TableSpec:
         continuation_anchor=anchor,
         continuation_fields=[f for f in ("description",) if f in columns and f != anchor],
         pdfplumber={},
+        numeric_totals=True,
     )
 
 
 def read_pdf(data: bytes, name: str, spec: GenericSpec, carry: Header | None = None) -> tuple[PdfExtract, Header | None]:
-    """Line items of a PDF read with the general reader. `carry`: the header of an earlier part of the same invoice."""
-    header = find_pdf_header(data, name, spec) or carry
+    """Line items of a PDF read with the general reader. `carry`: the header of an earlier part of the same invoice.
+    A PDF with text is read as it is; only when its text has no item table are its picture pages read by OCR too
+    (the invoice may be a scan among pages with text)."""
+    mode = ocr.AUTO
+    found, unread = find_pdf_header(data, name, spec)
+    if found is None and unread:
+        mode = ocr.ALL
+        found, _ = find_pdf_header(data, name, spec, mode)
+    header = found or carry
     if header is None:
         result = PdfExtract(name=name)
-        with extract.open_pdf(data, name) as pdf:
+        with extract.open_pdf(data, name, mode) as pdf:
             result.page_count = len(pdf.pages)
+            result.ocr_pages = list(pdf.ocr_pages)
             result.text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         return result, None
     if header.kind == "ruled":
-        result, _ = extract.extract(data, name, _ruled_spec(header, spec))
+        result, _ = extract.extract(data, name, _ruled_spec(header, spec), ocr_mode=mode)
         return result, header
-    return _read_words(data, name, header, spec, carried=header is carry), header
+    return _read_words(data, name, header, spec, carried=header is carry, ocr_mode=mode), header
 
 
 def _union(boxes: list[Bbox]) -> Bbox:
@@ -306,15 +319,16 @@ def _is_item(values: dict[str, str], fields: dict[str, int]) -> bool:
     return bool(values.get("model"))
 
 
-def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carried: bool = False) -> PdfExtract:
+def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carried: bool = False, ocr_mode: str = ocr.AUTO) -> PdfExtract:
     cols = sorted(header.labels, key=lambda lb: lb.x0)
     result = PdfExtract(name=name, header_found=True)
     result.labels = {lb.field: lb.text for lb in cols if lb.field}
     height = max(header.bottom - header.top, 6.0)
     max_gap = 3.2 * min(height, 14.0)  # more space than this between two lines: the table has ended
     texts: list[str] = []
-    with extract.open_pdf(data, name) as pdf:
+    with extract.open_pdf(data, name, ocr_mode) as pdf:
         result.page_count = len(pdf.pages)
+        result.ocr_pages = list(pdf.ocr_pages)
         pages = [(n, p, _lines(p.extract_words())) for n, p in enumerate(pdf.pages, 1)]
         texts = [p.extract_text() or "" for _, p, _ in pages]
     if not carried:
@@ -360,6 +374,10 @@ def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carri
             if len(result.items) == before:
                 pending.append(line)  # top of a following page: maybe the end of the last item
                 continue
+            if extract.unlabeled_totals(result.items, line.values) and (last_bottom is None or line.top - last_bottom <= max_gap):
+                result.totals = extract.place_sums(result.items, line.values)  # the sums right under the lines, without a "Total" label
+                result.totals_row = RowBox(page_no, line.bbox, line.cell_boxes(cols))
+                break
             if last_bottom is not None and line.top - last_bottom > max_gap:
                 break  # far below the last item: the table has ended on this page
             if all(i in text_cols for i in line.by_col):

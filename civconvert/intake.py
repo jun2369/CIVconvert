@@ -191,7 +191,7 @@ _NAME_OTHER = re.compile(
 def document_text(name: str, data: bytes, kind: str) -> tuple[str, str]:
     """The text of the first pages of a PDF / of a workbook's sheets, and (Excel) its labels with the value below."""
     if kind == sources.PDF:
-        with extract.open_pdf(data, name) as pdf:
+        with extract.open_pdf(data, name, ocr_limit=3) as pdf:  # a scanned PDF: its first pages by OCR
             return "\n".join(page.extract_text() or "" for page in pdf.pages[:3]), ""
     grids = sources.read_workbook(data, name, kind)
     return "\n\n".join(g.text() for g in grids), generic.label_values(grids)
@@ -231,7 +231,8 @@ def choose(attachments: list[Attachment]) -> list[Decision]:
     spec = None
     decisions = []
     for a in attachments:
-        d = Decision(a, None if a.missing else sources.kind(a.name, a.data))
+        found = None if a.missing else sources.kind(a.name, a.data)
+        d = Decision(a, None if found == sources.IMAGE else found)  # pictures in e-mails (logos, signatures) are not read
         decisions.append(d)
         if d.kind is None:
             d.code = "no_content" if a.missing else "inline_picture" if a.inline else "not_pdf_excel"

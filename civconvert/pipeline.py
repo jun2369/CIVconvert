@@ -17,7 +17,7 @@ from typing import Any
 
 from openpyxl.utils import get_column_letter
 
-from . import extract, generic, sources
+from . import extract, generic, ocr, sources
 from .export import to_csv, to_xlsx
 from .profiles import AUTO_ID, ColumnSpec, ConfigError, CustomerProfile, load_customers, load_generic, load_template_profile
 from .template import Template, load_template, normalize_header
@@ -346,15 +346,21 @@ def _file_kinds(files: list[InputFile]) -> list[str]:
     for f in files:
         kind = sources.kind(f.name, f.data)
         if kind is None:
-            raise ConversionError(f"{f.name}: not a PDF or Excel file")
+            raise ConversionError(f"{f.name}: not a PDF, Excel or picture file")
         kinds.append(kind)
     return kinds
 
 
+def _no_text(name: str) -> ConversionError:
+    if not ocr.available():
+        return ConversionError(f"{name}: the PDF has no text layer (scanned image?) and OCR is not installed on this server")
+    return ConversionError(f"{name}: no text could be read – the page is empty, or the picture is too unclear for OCR")
+
+
 def file_text(f: InputFile, kind: str) -> str:
-    """The text of a PDF / the cells of a workbook (to recognise the customer)."""
+    """The text of a PDF or picture / the cells of a workbook (to recognise the customer)."""
     try:
-        if kind == sources.PDF:
+        if kind in (sources.PDF, sources.IMAGE):
             return extract.read_text(f.data, f.name)
         return "\n\n".join(g.text() for g in sources.read_workbook(f.data, f.name, kind))
     except (extract.PdfError, sources.SourceError) as e:
@@ -404,7 +410,7 @@ def _convert_with_profile(files: list[InputFile], profile: CustomerProfile) -> R
         except extract.PdfError as e:
             raise ConversionError(str(e)) from e
         if not part.text.strip():
-            raise ConversionError(f"{f.name}: the PDF has no text layer (scanned image?) – OCR is not supported yet")
+            raise _no_text(f.name)
         parts.append(part)
         header_seen = header_seen or part.header_found
         items.extend(part.items)
@@ -444,14 +450,14 @@ def _convert_general(files: list[InputFile], kinds: list[str], hint: CustomerPro
     carry = None
     for f, kind in zip(files, kinds):
         try:
-            if kind == sources.PDF:
+            if kind in (sources.PDF, sources.IMAGE):
                 part, carry = generic.read_pdf(f.data, f.name, spec, carry)
             else:
                 part = generic.read_excel(f.data, f.name, kind, spec, hint)
         except (extract.PdfError, sources.SourceError) as e:
             raise ConversionError(str(e)) from e
-        if kind == sources.PDF and not part.text.strip():
-            raise ConversionError(f"{f.name}: the PDF has no text layer (scanned image?) – OCR is not supported yet")
+        if kind in (sources.PDF, sources.IMAGE) and not part.text.strip():
+            raise _no_text(f.name)
         parts.append(part)
         items.extend(part.items)
         warnings.extend(part.notes)
@@ -508,6 +514,10 @@ def _finish(
 
     joined = [box.joined for part in parts for box in part.rows]
     checks, check_warnings, flags = _run_checks(profile, items, totals, rows, columns, joined)
+    read_by_ocr = [f"{p.name} p.{', '.join(map(str, p.ocr_pages))}" for p in parts if p.ocr_pages]
+    if read_by_ocr:  # letters can be misread: a person compares the values with the picture
+        pages = "; ".join(read_by_ocr)
+        checks.append(Check("OCR", False, f"read from a picture by OCR ({pages}) – compare the values with the picture", "ocr", {"pages": pages}))
     return Result(
         customer=profile,
         template=template,

@@ -25,6 +25,12 @@
     return node;
   };
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  /** What the original is, from its name: "Excel", "PNG", "JPG" … or "PDF". */
+  const sourceKind = (source) => {
+    if (/\.(xlsx|xlsm|xls)\b/i.test(source)) return "Excel";
+    const m = /\.(png|jpe?g|tiff?|bmp|gif|webp|heic|heif|avif)\b/i.exec(source);
+    return m ? m[1].toUpperCase() : "PDF";
+  };
   const store = {
     get: (k) => { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
     set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
@@ -272,7 +278,7 @@
     p.doc = el("div", { class: "pv-doc" }, p.gutter, p.sheet);
     p.view.append(el("div", { class: "pv-stage" }, p.doc));
     const bar = el("div", { class: "pane-bar" },
-      el("span", { class: "pane-title" }, L("pv.original") + " ", el("small", { text: /\.(xlsx|xlsm|xls)\b/i.test((S.pv.pages[0] || {}).source || "") ? "Excel" : "PDF" })),
+      el("span", { class: "pane-title" }, L("pv.original") + " ", el("small", { text: sourceKind((S.pv.pages[0] || {}).source || "") })),
       el("span", { class: "pv-group" }, p.prevBtn, p.pageInfo, p.nextBtn),
       el("span", { class: "pv-seg" }, p.tableBtn, p.pageBtn),
       el("span", { class: "pane-sub" }, p.zoomBar));

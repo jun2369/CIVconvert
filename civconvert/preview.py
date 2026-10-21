@@ -19,7 +19,7 @@ from typing import Any
 from openpyxl import load_workbook
 from PIL import features
 
-from . import extract
+from . import extract, ocr
 from .extract import RowBox
 from .pipeline import InputFile, Result
 from .template import cell_style, column_width_px, shown_value
@@ -167,7 +167,7 @@ def _pdf_pages(f: InputFile, boxes: list[dict[str, Any]], out: list[dict[str, An
                origin: dict[int, tuple[float, float]]) -> int:
     """The page images of a PDF, appended to `out`; returns how many pages without line items were left out."""
     skipped = 0
-    with extract.open_pdf(f.data, f.name) as pdf:
+    with extract.open_pdf(f.data, f.name, ocr.NONE) as pdf:  # a picture is drawn as it is: no OCR needed
         for page_no, page in enumerate(pdf.pages, 1):
             on_page = [b for b in boxes if b["page"] == page_no]
             if not on_page and len(out) >= MAX_PAGES:
