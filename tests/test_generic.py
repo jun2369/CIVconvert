@@ -114,6 +114,92 @@ def test_excel_preview_draws_the_sheet():
     assert pv["totals"]["bbox"] is not None and pv["totals_values"]["amount"] == "856"
 
 
+SIZE_ROWS_HEAD = ["Boxes", "Acme Code", "Description", "HTS CODE", "Fabric", "Fabric & Color Code", "Size", "Pcs", "USD", "EXW/USD"]
+SIZE_ROWS = [  # from row 7
+    ["Marks & Nos/", None, "No & kind of pkgs.", None, None, "Description of goods", None, "Quantity", "Rate", "Amount"],
+    SIZE_ROWS_HEAD,
+    ["100 % COTTON LADIES GARMENTS (Powerloom Items)"],
+    [12, "10018LW(a)", "Ladies long dress", 6204423020, "Cotton voile", "CORG/22/10", "S", 128, 31.65, 4051.2],  # merged over 3 rows
+    [None] * 6 + ["M", 55, 31.65, 1740.75],
+    [None] * 6 + ["L", 37, 31.65, 1171.05],
+    [],
+    SIZE_ROWS_HEAD,  # repeated
+    ["100 % COTTON KIDS GARMENTS (Powerloom Items)"],
+    [3, "10059KW(a)", "Girls dress", 6204423020, "Gingham", "CORG/054/01", "2-3Y", 18, 27.75, 499.5],  # merged over 2 rows
+    [None] * 6 + ["7-8Y", 4, 29.65, 118.6],
+    [],
+    [2, "8413B(d)", "Hottie bag", 4202224020, "Gingham", "CORG/055/02", "OS", 37, 6.95, 257.15],
+    *[[]] * 8,
+    ["Amount in words", None, None, None, None, None, "Total Pcs : ", 279, None, 7838.25],
+    [],
+    ["Total EXW Value USD : Seven thousand eight hundred thirty eight and cents twenty five only."],
+]
+SIZE_ROWS_MERGED = [(10, 12), (16, 17)]  # rows of the merged product cells (columns B-F)
+SIZE_ROWS_XLS = Path(__file__).resolve().parent / "fixtures" / "size_rows.xls"  # the same sheet, old Excel format
+
+
+def size_rows_xlsx() -> bytes:
+    """An export invoice laid out like many Indian exporters' (e.g. Acus Impex): the header written over two
+    rows, each product's code, description and HTS code in merged cells next to its size rows, section titles,
+    the header repeated, the invoice number under its label, the totals row a few empty rows below with
+    "Total Pcs :" in the size column – and a tax invoice sheet (no HTS codes, a tax "Rate") that is not the one."""
+    wb = Workbook()
+    inv = wb.active
+    inv.title = "Invoice "
+    tax = wb.create_sheet("Tax Invoice")
+    for ws, title in ((inv, "EXPORT INVOICE"), (tax, "TAX INVOICE")):
+        ws["A1"], ws["A2"], ws["A3"] = title, "Exporter:", "ACME EXPORTS PVT. LTD."
+        ws["F2"], ws["F3"] = "Invoice no & date", "AE-017-26-27 Dt. 28.09.2026"
+        ws["F4"], ws["F5"] = "Buyer's code no & date", "Order No. 021A-26-27"
+    inv.merge_cells("A1:J1")
+    tax_rows = [
+        [None, None, None, None, "Description of goods", None, "Quantity", "Rate", "Amount", None, "IGST (INR)"],
+        ["Boxes", "Acme Code", "Description", "Fabric", "Fabric & Color Code", "Size", "Pcs", "USD", "EXW / USD", "Taxable Value (INR)", "Rate", "Amount"],
+        [12, "10018LW(a)", "Ladies long dress", "Cotton voile", "CORG/22/10", "S", 128, 31.65, 4051.2, 385269.12, 0.18, 69348.44],
+    ]
+    for ws, rows in ((inv, SIZE_ROWS), (tax, tax_rows)):
+        for r, row in enumerate(rows, 7):
+            for c, v in enumerate(row, 1):
+                ws.cell(row=r, column=c, value=v)
+    for first, last in SIZE_ROWS_MERGED:
+        for col in "BCDEF":
+            inv.merge_cells(f"{col}{first}:{col}{last}")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+SIZE_ROWS_LINES = [("10018LW(a)", "Ladies long dress", "6204423020")] * 3 + [("10059KW(a)", "Girls dress", "6204423020")] * 2 + [
+    ("8413B(d)", "Hottie bag", "4202224020")]
+
+
+def test_two_header_rows_and_merged_size_rows():
+    files = [InputFile("AE-017-26-27.xlsx", size_rows_xlsx())]
+    r = convert(files)
+    assert r.customer.id == "auto"
+    assert _dfe(r) == SIZE_ROWS_LINES  # every size row is a line, with its product's merged code, description, HTS
+    assert [(i["qty"], i["unit_price"], i["amount"]) for i in r.items][3:5] == [("18", "27.75", "499.5"), ("4", "29.65", "118.6")]
+    assert [i["_source"] for i in r.items] == [f"AE-017-26-27.xlsx / Invoice  row {n}" for n in (10, 11, 12, 16, 17, 19)]
+    assert r.parts[0].labels == {"hs_code": "HTS CODE", "model": "Acme Code", "description": "Description",
+                                 "qty": "Quantity Pcs", "unit_price": "Rate USD", "amount": "Amount EXW/USD"}
+    assert r.document == {"invoice_no": "AE-017-26-27", "invoice_date": "28.09.2026"}  # under "Invoice no & date"
+    assert {c.name: c.ok for c in r.checks} == {"Line items": True, "Subtotal qty": True, "Subtotal amount": True, "Line math": True}
+    assert r.parts[0].totals["qty"] == "279" and r.warnings == [] and not r.needs_review
+    rows = r.parts[0].layout["rows"]
+    assert [(row["kind"], row["excel_row"]) for row in rows] == [("head", 7), ("head", 8)] + [
+        ("item", n) for n in (10, 11, 12, 16, 17, 19)] + [("total", 28)]
+    pv = preview.build(r, files)
+    assert len(pv["lines"]) == 6 and all(line["page"] == 0 and line["bbox"] for line in pv["lines"])
+    assert pv["totals"]["bbox"] is not None and pv["totals_values"]["amount"] == "7838.25"
+
+
+def test_two_header_rows_and_merged_size_rows_old_excel_format():
+    r = convert([InputFile(SIZE_ROWS_XLS.name, SIZE_ROWS_XLS.read_bytes())])
+    assert _dfe(r) == SIZE_ROWS_LINES
+    assert r.document == {"invoice_no": "AE-017-26-27", "invoice_date": "28.09.2026"}
+    assert all(c.ok for c in r.checks), r.checks
+
+
 def test_unknown_supplier_is_read_like_a_known_one():
     """The same ruled table with another seller's name: the general reader gives what the profile gives."""
     known = convert([InputFile("a.pdf", problem_invoice())])
@@ -154,11 +240,21 @@ def test_no_item_table_is_a_clear_error():
      {"line_no": 0, "model": 1, "description": 2, "hs_code": 3, "qty": 4, "unit_price": 5, "amount": 6}),
     (["PO#", "Item#", "Material Description", "Qty / CTN", "Qty", "Total Gross Weight"],
      {"model": 1, "description": 2, "qty": 4, "gross_weight": 5}),
+    (["Boxes", "Acus Code", "Description", "HTS CODE", "Fabric", "Fabric & Color Code", "Size", "Pcs", "Rate", "Amount"],
+     {"model": 1, "description": 2, "hs_code": 3, "qty": 7, "unit_price": 8, "amount": 9}),
+    (["Style", "Description", "HSN Code", "Qty", "IGST Rate", "Rate/Pc", "Amount"],
+     {"model": 0, "description": 1, "hs_code": 2, "qty": 3, "unit_price": 5, "amount": 6}),
 ])
 def test_header_wordings(labels, expected):
     m = generic.match_labels(labels, load_generic())
     assert m is not None
     assert {f: i for f, i in m.fields.items() if f in expected} == expected
+
+
+def test_codes_that_are_not_the_product_code():
+    for label in ("Color Code", "Fabric Code", "Country Code", "Bar Code", "HSN Code"):
+        m = generic.match_labels([label, "Item Description", "HS Code", "Qty", "Amount"], load_generic())
+        assert m is not None and "model" not in m.fields, label
 
 
 def test_not_a_header():

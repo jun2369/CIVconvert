@@ -12,7 +12,7 @@ import io
 import re
 import unicodedata
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .formula import format_number
@@ -61,6 +61,8 @@ class Grid:
 
     name: str
     cells: list[list[Any]]
+    # merged cells: (first row, first column, last row, last column), 0-based; the value is in the first cell
+    merged: list[tuple[int, int, int, int]] = field(default_factory=list)
 
     def text(self) -> str:
         return "\n".join(" ".join(t for t in (cell_text(v) for v in row) if t) for row in self.cells)
@@ -114,14 +116,18 @@ def _read_xlsx(data: bytes) -> list[Grid]:
         rows = []
         for row in ws.iter_rows(max_row=min(ws.max_row, MAX_ROWS), max_col=min(ws.max_column, MAX_COLS), values_only=True):
             rows.append(list(row))
-        grids.append(Grid(ws.title, rows))
+        merged = [(m.min_row - 1, m.min_col - 1, m.max_row - 1, m.max_col - 1) for m in ws.merged_cells.ranges]
+        grids.append(Grid(ws.title, rows, [m for m in merged if m[0] < MAX_ROWS and m[1] < MAX_COLS]))
     return grids
 
 
 def _read_xls(data: bytes) -> list[Grid]:
     import xlrd
 
-    book = xlrd.open_workbook(file_contents=data)
+    try:  # with the cell formats: needed for the merged cells
+        book = xlrd.open_workbook(file_contents=data, formatting_info=True)
+    except Exception:
+        book = xlrd.open_workbook(file_contents=data)
     grids = []
     for sheet in book.sheets():
         if getattr(sheet, "visibility", 0):
@@ -142,5 +148,6 @@ def _read_xls(data: bytes) -> list[Grid]:
                 else:
                     row.append(None)
             rows.append(row)
-        grids.append(Grid(sheet.name, rows))
+        merged = [(r0, c0, r1 - 1, c1 - 1) for r0, r1, c0, c1 in getattr(sheet, "merged_cells", [])]
+        grids.append(Grid(sheet.name, rows, [m for m in merged if m[0] < MAX_ROWS and m[1] < MAX_COLS]))
     return grids

@@ -11,7 +11,10 @@ the one that looks most like the invoice's line items wins: HS codes and prices 
     under its header, numbers end under it); a line without an item number, HS code or numbers is
     wrapped text of the line above; the table may go on over the next pages, with or without
     repeating its header; the last "Total" line is the one that is checked
-  - Excel: by the header row's cells; the sheet is drawn for the preview (see preview.py)
+  - Excel: by the header row's cells (a header may be written over two rows: "Quantity" over "Pcs");
+    a merged cell next to several rows (a product's code, description and HS code next to its size rows)
+    counts for each of them; a repeated header row is skipped; the totals row may be a few empty rows
+    below the table, with "Total" in any of its cells. The sheet is drawn for the preview (see preview.py)
 """
 
 from __future__ import annotations
@@ -106,7 +109,8 @@ class Header:
     cells: list[str] = field(default_factory=list)  # ruled / excel: the header row's cells
     top: float = 0.0
     bottom: float = 0.0
-    row: int = 0  # excel: row index of the header
+    row: int = 0  # excel: row index of the header (its last row)
+    span: int = 1  # excel: the rows the header is written over
 
 
 def _lines(words: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -414,15 +418,21 @@ def _hs_text(value: Any, text: str) -> str:
     return text
 
 
-def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profile: CustomerProfile | None = None) -> PdfExtract:
-    """Line items of an .xlsx / .xls invoice. With `profile`, its own header texts are tried first."""
-    grids = sources.read_workbook(data, name, file_kind)
-    result = PdfExtract(name=name, page_count=1, text="\n\n".join(g.text() for g in grids))
+def _texts(row: list[Any]) -> list[str]:
+    return [sources.cell_text(v) for v in row]
+
+
+def _at(texts: list[str], c: int) -> str:
+    return texts[c] if c < len(texts) else ""
+
+
+def _excel_header(grids: list[sources.Grid], spec: GenericSpec, profile: CustomerProfile | None) -> Header | None:
+    """The item-table header of a workbook: the best row of all sheets – or two rows together, when the
+    header is written over two rows ("Quantity" over "Pcs", "Rate" over "USD") and that is a better one."""
     best: Header | None = None
-    for gi, grid in enumerate(grids):
-        bonus = _context(grid.text()[:4000], spec)
-        for ri, row in enumerate(grid.cells[:300]):
-            texts = [sources.cell_text(v) for v in row]
+    sheets = [(gi, _context(grid.text()[:4000], spec), [_texts(row) for row in grid.cells[:300]]) for gi, grid in enumerate(grids)]
+    for gi, bonus, rows in sheets:
+        for ri, texts in enumerate(rows):
             if sum(1 for t in texts if t) < 3:
                 continue
             if profile is not None:
@@ -436,6 +446,89 @@ def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profil
                 cand = Header(m.score + bonus, "excel", gi, m.fields, cells=texts, row=ri)
                 if best is None or cand.score > best.score:
                     best = cand
+    for gi, bonus, rows in sheets:
+        cells = grids[gi].cells
+        for ri in range(len(rows) - 1):
+            upper, lower = rows[ri], rows[ri + 1]
+            if sum(1 for t in upper if t) < 2 or sum(1 for t in lower if t) < 3:
+                continue
+            if _has_numbers(cells[ri], upper) or _has_numbers(cells[ri + 1], lower):
+                continue  # data, not labels
+            joined = [f"{_at(upper, c)} {_at(lower, c)}".strip() for c in range(max(len(upper), len(lower)))]
+            m = match_labels(joined, spec)
+            if m is not None and (best is None or m.score + bonus > best.score):
+                for f, c in m.fields.items():  # the upper text only when it names the same field ("Quantity" over "Pcs")
+                    if _at(upper, c) and _at(lower, c) and not _names(upper[c], f, spec):
+                        joined[c] = lower[c]
+                best = Header(m.score + bonus, "excel", gi, m.fields, cells=joined, row=ri + 1, span=2)
+    return best
+
+
+def _names(text: str, f: str, spec: GenericSpec) -> bool:
+    """Whether a header text is one of the wordings of field f."""
+    n, ex = norm(text), spec.exclude.get(f)
+    return any(rx.search(n) for rx in spec.synonyms.get(f, [])) and not (ex and ex.search(n))
+
+
+def _has_numbers(row: list[Any], texts: list[str]) -> bool:
+    return any(isinstance(v, (int, float)) and not isinstance(v, bool) for v in row) or any(is_number(t) for t in texts)
+
+
+ADDS_UP = ("qty", "amount", "net_weight", "gross_weight")  # one merged value for several rows is not repeated
+
+
+def _row_values(grid: sources.Grid, ri: int, texts: list[str], fields: dict[str, int], fill: dict[tuple[int, int], int]) -> tuple[dict[str, str], set[str]]:
+    """The fields of a table row, and which of them come from a merged cell above it (a product's code,
+    description and HS code next to its size rows count for each of them – not quantities and amounts)."""
+    row = grid.cells[ri]
+    values: dict[str, str] = {}
+    filled: set[str] = set()
+    for f, c in fields.items():
+        value, text = (row[c] if c < len(row) else None), _at(texts, c)
+        if not text and (ri, c) in fill and f not in ADDS_UP:
+            above = grid.cells[fill[(ri, c)]]
+            value = above[c] if c < len(above) else None
+            text = sources.cell_text(value)
+            if text:
+                filled.add(f)
+        values[f] = _hs_text(value, text) if f == "hs_code" else text
+    return values, filled
+
+
+def _repeats(texts: list[str], head: list[str]) -> bool:
+    """A header row repeated in the table (Excel invoices often repeat it on every printed page)."""
+    labels = [(c, norm(t)) for c, t in enumerate(head) if t]
+    same = sum(1 for c, t in labels if norm(_at(texts, c)) == t)
+    return same >= max(3, -(-3 * len(labels) // 5))
+
+
+def _is_total(texts: list[str], values: dict[str, str], total_rx: re.Pattern) -> bool:
+    """A totals row with "Total" in any of its cells ("Total Pcs :" under the size column): the sums in the
+    quantity / amount columns, no product code or HS code."""
+    if values.get("model") or re.search(r"\d{4}", values.get("hs_code", "")):
+        return False
+    if not any(is_number(values.get(f)) for f in ("qty", "amount")):
+        return False
+    return any(total_rx.search(_LEADING.sub("", norm(t))) for t in texts if t)
+
+
+def _late_total(grid: sources.Grid, start: int, fields: dict[str, int], total_rx: re.Pattern) -> tuple[int, list[str], dict[str, str]] | None:
+    """The totals row a few empty rows below the table: the next row with text, if it is one."""
+    for ri in range(start, min(len(grid.cells), start + 30)):
+        texts = _texts(grid.cells[ri])
+        if not any(texts):
+            continue
+        values = {f: _at(texts, c) for f, c in fields.items()}
+        return (ri, texts, values) if _is_total(texts, values, total_rx) else None
+    return None
+
+
+def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profile: CustomerProfile | None = None) -> PdfExtract:
+    """Line items of an .xlsx / .xls invoice. With `profile`, its own header texts are tried first."""
+    grids = sources.read_workbook(data, name, file_kind)
+    result = PdfExtract(name=name, page_count=1, text="\n\n".join(g.text() for g in grids))
+    result.label_values = label_values(grids)
+    best = _excel_header(grids, spec, profile)
     if best is None:
         return result
     grid = grids[best.page]
@@ -444,35 +537,45 @@ def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profil
     fields = best.fields
     result.header_found = True
     result.labels = {f: best.cells[i] for f, i in fields.items()}
+    head_rows = list(range(best.row - best.span + 1, best.row + 1))
+    heads = [_texts(grid.cells[r]) for r in head_rows]
     shown = [c for c, t in enumerate(best.cells) if t]  # the columns drawn in the preview
-    drawn: list[dict[str, Any]] = [{"kind": "head", "excel_row": best.row + 1, "cells": [best.cells[c] for c in shown]}]
+    drawn: list[dict[str, Any]] = [{"kind": "head", "excel_row": r + 1, "cells": [_at(h, c) for c in shown]} for r, h in zip(head_rows, heads)]
     item_rows: list[int] = []  # drawn-row position of each item
+    fill = {(r, c0): r0 for r0, c0, r1, _ in grid.merged if r0 > best.row for r in range(r0 + 1, r1 + 1)}
     empty = 0
     for ri in range(best.row + 1, len(grid.cells)):
-        row = grid.cells[ri]
-        texts = [sources.cell_text(v) for v in row]
+        texts = _texts(grid.cells[ri])
         if not any(texts):
             empty += 1
             if empty >= 5 and result.items:
+                late = _late_total(grid, ri + 1, fields, total_rx)
+                if late is not None:
+                    li, late_texts, result.totals = late
+                    drawn.append({"kind": "total", "excel_row": li + 1, "cells": [_at(late_texts, c) for c in shown]})
                 break
             continue
         empty = 0
-        values = {f: texts[c] if c < len(texts) else "" for f, c in fields.items()}
-        if "hs_code" in fields and fields["hs_code"] < len(row):
-            values["hs_code"] = _hs_text(row[fields["hs_code"]], values["hs_code"])
+        values, filled = _row_values(grid, ri, texts, fields, fill)
         first = _LEADING.sub("", norm(next(t for t in texts if t)))
-        cells = [texts[c] if c < len(texts) else "" for c in shown]
+        cells = [_at(texts, c) for c in shown]
         if (stop_rx.search(first) or total_rx.search(first)) and not values.get("model") and not re.search(r"\d{4}", values.get("hs_code", "")):
             if total_rx.search(first):
                 result.totals = values
                 drawn.append({"kind": "total", "excel_row": ri + 1, "cells": cells})
             break
-        if _is_item(values, fields):
+        if any(_repeats(texts, h) for h in heads):
+            continue
+        if _is_total(texts, values, total_rx):
+            result.totals = values
+            drawn.append({"kind": "total", "excel_row": ri + 1, "cells": cells})
+            break
+        if _is_item(values, fields) and (not filled or any(is_number(values.get(f)) for f in ("qty", "amount"))):
             values["_source"] = f"{name} / {grid.name} row {ri + 1}"
             result.items.append(values)
             drawn.append({"kind": "item", "excel_row": ri + 1, "cells": cells})
             item_rows.append(len(drawn) - 1)
-        elif result.items and values.get("description") and not any(values.get(f) for f in ("model", "hs_code", *NUMBER_FIELDS)):
+        elif result.items and values.get("description") and "description" not in filled and not any(values.get(f) for f in ("model", "hs_code", *NUMBER_FIELDS)):
             prev = result.items[-1]
             prev["description"] = f"{prev.get('description', '')} {values['description']}".strip()
             drawn.append({"kind": "more", "excel_row": ri + 1, "cells": cells})
@@ -480,7 +583,8 @@ def read_excel(data: bytes, name: str, file_kind: str, spec: GenericSpec, profil
             break  # another table starts
     layout, boxes = _sheet_layout(grid.name, shown, drawn, {f: shown.index(c) for f, c in fields.items() if c in shown})
     result.layout = layout
-    result.headers = [boxes[0]]
+    head = boxes[: best.span]
+    result.headers = [RowBox(1, _union([b.bbox for b in head]), {f: _union([b.cells[f] for b in head]) for f in head[0].cells})]
     # an item's box covers its wrapped rows below it
     for n, pos in enumerate(item_rows):
         end = item_rows[n + 1] if n + 1 < len(item_rows) else len(drawn)
@@ -521,16 +625,38 @@ def _sheet_layout(sheet: str, shown: list[int], drawn: list[dict[str, Any]], fie
 # ───────────────────────────── invoice fields & checks ─────────────────────────────
 
 
-def document_fields(text: str, spec: GenericSpec) -> dict[str, str]:
-    """Invoice number and date found anywhere in the text (the first match of each)."""
-    flat = unicodedata.normalize("NFKC", text)
-    out = {}
-    for key, patterns in spec.document_fields.items():
-        for rx in patterns:
-            m = rx.search(flat)
-            if m:
-                out[key] = m.group(1).strip()
-                break
+def label_values(grids: list[sources.Grid]) -> str:
+    """Excel: labels with their value in the cell below ("Invoice no & date" over "AI-083-26-27 Dt.
+    28.09.2026"), as "label: value" lines for the invoice-field patterns."""
+    lines = []
+    for g in grids:
+        tall = {(r0, c0): r1 for r0, c0, r1, _ in g.merged}  # a merged label: its value is below its last row
+        for r, row in enumerate(g.cells[:60]):
+            for c, v in enumerate(row):
+                label = sources.cell_text(v) if isinstance(v, str) else ""
+                if not label or len(label) > 40 or re.search(r"\d", label):
+                    continue
+                rb = tall.get((r, c), r) + 1
+                value = sources.cell_text(g.cells[rb][c]) if rb < len(g.cells) and c < len(g.cells[rb]) else ""
+                if value:
+                    lines.append(f"{label.rstrip(' :')}: {value}")
+    return "\n".join(lines)
+
+
+def document_fields(text: str, spec: GenericSpec, more: str = "") -> dict[str, str]:
+    """Invoice number and date found anywhere in the text (the first match of each); `more` (Excel: labels
+    with their value below them) is looked at for what the text does not have."""
+    out: dict[str, str] = {}
+    for source in (text, more):
+        flat = unicodedata.normalize("NFKC", source)
+        for key, patterns in spec.document_fields.items():
+            if key in out:
+                continue
+            for rx in patterns:
+                m = rx.search(flat)
+                if m:
+                    out[key] = m.group(1).strip()
+                    break
     return out
 
 

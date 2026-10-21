@@ -12,7 +12,7 @@ fields:
   hs_code:
     - '^(h\.?\s?s\.?|h\.?t\.?s\.?)(\s*(code|codes|no\.?|number|#))?$'
     - '\b(hs|hts)\s*(code|no|number|#)|united\s*states\s*hs|\bhts\b|^hs\b|\bhs$'
-    - 'tariff(\s*(code|no\.?|number|#))?$|harmoni[sz]ed|commodity\s*code|customs\s*code|hs编码|海关编码|商品编码|税则号|税号'
+    - 'tariff(\s*(code|no\.?|number|#))?$|harmoni[sz]ed|commodity\s*code|customs\s*code|\bhsn\b|hs编码|海关编码|商品编码|税则号|税号'
   model:
     - '^(model|model\s*(no\.?|number|#)|型号)$'
     - '\bmodel\b'
@@ -22,6 +22,8 @@ fields:
     - '\barticle\b|^art\.?\s*no|\bstyle\b'
     - 'material\s*(no\.?|number|code|#)'
     - 'ordering\s*code|customer\s*(pn|part|item)|\bmpn\b'
+    # 最后才用："<某个词> Code"（例如供应商自己的货号 "Acus Code"），颜色 / 面料 / 国家 / 银行 / 税等的 code 不算
+    - '\b(?!(?:colou?r|fabric|size|countr\w*|origin|zip|postal|post|pin|area|currency|curr|bank|swift|ifsc|sort|branch|tax|gst|vat|hsn|hs|hts|sac|tariff|customs|commodity|duty|bar|qr|ean|upc|gtin|unit|uom|dial|iata|port|airport|carrier|payment|delivery|shipping|incoterms?|terms?|lot|batch|location|warehouse|plant|account|cost|dept|department|project|discount|reason|status|language|lang|region|state|city|province)\b)[a-z][a-z0-9]*\s+code$'
   description:
     - '^(description|desc\.?|goods\s*description|description\s*of\s*goods|product\s*description|item\s*description|commodity\s*description|material\s*description)\b'
     - 'description|\bdesc\b'
@@ -29,9 +31,12 @@ fields:
   qty:
     - '^(q''?ty|quantity|qnty|数量)(\s*\(?[a-z]{1,6}\)?)?$'
     - '\bq''?ty\b|quantity|数量'
+    - '\bpcs\b|\bpieces\b'
   unit_price:
     - 'unit\s*price|单价|^u\.?\s*price|unit\s*cost|price\s*/\s*unit|price\s*per'
     - '\bprice\b'
+    # "Rate" / "Rate USD" 也是单价（印度等地的发票常这样写）；税率、汇率、运费率等不算
+    - '^(?!.*(?:tax|gst|vat|duty|exchange|freight|discount|interest|commission|%)).*\brate\b'
   amount:
     - '^(amount|total\s*amount|net\s*amount|line\s*amount|total\s*(value|price)|extended(\s*(price|amount|value))?|金额|总价|总金额)\b'
     - 'amount|\bvalue\b|^total(\s*\(.*\))?$|金额|总价|总额'
@@ -64,7 +69,8 @@ needs_one_of:
 weights: { hs_code: 4, model: 3, description: 3, amount: 2, unit_price: 2, qty: 2, origin: 1 }
 invoice_title: 'commercial\s*invoice|\binvoice\b|发票'
 other_title: 'packing\s*(list|slip)|weight\s*list|\bcontract\b|proforma|合同|装箱'
-# 第一格（或一行开头）是这些字 = 明细结束；这一行同时作为合计行用于核对
+# 第一格（或一行开头）是这些字 = 明细结束；这一行同时作为合计行用于核对。
+# Excel 里 "Total" 也可以在这一行的其他格（如 "Total Pcs :"），只要数量 / 金额列有合计数；表格下面隔几行空行也可以
 total_row: '^(sub\s*-?\s*total|grand\s*total|total|合\s*计|总\s*计|小\s*计)\b'
 
 # 发票级信息（正则，括号内为取值）；{DATE} = 常见的日期写法
@@ -73,10 +79,14 @@ document_fields:
     - '(?:commercial\s+)?invoice\s*(?:no\.?|number|num\.?|#)\s*[:.#]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
     - '\binv\.?\s*(?:no\.?|#)\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
     - '发票号(?:码)?\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    # "Invoice no & date: AI-083-26-27 Dt. 28.09.2026"（Excel 里常是标签在上、值在下面一格）
+    - 'invoice\s*(?:no\.?|number|#)\s*(?:&|and|/)\s*date[ \t]*[:.]?[ \t]*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
   invoice_date:
     - 'invoice\s*date\s*[:]?\s*({DATE})'
     - '(?<![a-z])date\s*[:]\s*({DATE})'
     - '日期\s*[:]?\s*({DATE})'
+    # 发票号后面跟着日期："AI-083-26-27 Dt. 28.09.2026"、"INV-1234 dated 01.02.2026"
+    - 'invoice\s*(?:no\.?|number|#)(?:\s*(?:&|and|/)\s*date)?[ \t]*[:.#]?[ \t]*[A-Za-z0-9][A-Za-z0-9\-/._]{2,}[ \t,]*(?:dt\.?|dated|date)[ \t]*[:.]?[ \t]*({DATE})'
 
 # 和客户配置一样：填入模板的列、校验、文件名
 required: [model, description, hs_code]

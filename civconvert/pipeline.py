@@ -457,7 +457,7 @@ def _convert_general(files: list[InputFile], kinds: list[str], hint: CustomerPro
         warnings.extend(part.notes)
         if part.totals is not None:
             totals = part.totals
-        found = generic.document_fields(part.text, spec)
+        found = generic.document_fields(part.text, spec, part.label_values)
         if hint is not None:
             for key, rx in hint.document_fields.items():
                 m = rx.search(part.text)
