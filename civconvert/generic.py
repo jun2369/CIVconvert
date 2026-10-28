@@ -8,14 +8,16 @@ the one that looks most like the invoice's line items wins: HS codes and prices 
 
   - PDF tables with ruling lines: by their cells, like a customer profile (extract.py)
   - PDF tables without lines: every word goes to the column whose header it sits under (text starts
-    under its header, numbers end under it); a line without an item number, HS code or numbers is
-    wrapped text of the line above; the table may go on over the next pages, with or without
-    repeating its header; the last "Total" line is the one that is checked – or a line of only the
-    sums of quantity / amount without a "Total" label
+    under its header, numbers end under it); text lines that overlap vertically are one row (a cell
+    written over more lines than its neighbours stands above and below the line with the numbers);
+    a line without an item number, HS code or numbers is wrapped text of the line above; the table
+    may go on over the next pages, with or without repeating its header; the last "Total" line is
+    the one that is checked – or a line of only the sums of quantity / amount without a "Total" label
   - pictures and scanned pages: read by OCR first (ocr.py), then as above
   - a header word broken over two lines ("Quantit" / "y") is one word; an HS code written in the description
     ("… HS:7007.11.0010") becomes the HS code; product codes under a "Description" header next to the
-    descriptions under "Hs Code" are taken for what they are (tidy_items)
+    descriptions under "Hs Code" are taken for what they are (tidy_items); a description column that holds
+    only the Chinese customs name is replaced by the English text of another column (english_description)
   - Excel: by the header row's cells (a header may be written over two rows: "Quantity" over "Pcs");
     a merged cell next to several rows (a product's code, description and HS code next to its size rows)
     counts for each of them; a repeated header row is skipped; the totals row may be a few empty rows
@@ -31,11 +33,12 @@ from typing import Any
 
 from openpyxl.utils import get_column_letter
 
-from . import extract, ocr, sources
+from . import extract, ocr, sources, transforms
 from .extract import Bbox, PdfExtract, RowBox
 from .profiles import CustomerProfile, GenericSpec, TableSpec
 
 NUMBER_FIELDS = ("qty", "amount", "unit_price")
+_OVERLAP = 0.25  # of the shorter line's height: two text lines that overlap by more than this are one table row
 _NUMBER = re.compile(r"^\s*(?:[A-Za-z]{0,3}\s?[$€£¥]|[$€£¥])?\s*[-+(]?\d[\d,]*(?:\.\d+)?\)?\s*(?:[A-Za-z]{1,5}|%)?\s*$")
 _ZERO_WIDTH = re.compile(r"[​-‏⁠﻿­]")
 _LEADING = re.compile(r"^[\W_]+")
@@ -281,6 +284,7 @@ def read_pdf(data: bytes, name: str, spec: GenericSpec, carry: Header | None = N
     else:
         result = _read_words(data, name, header, spec, carried=header is carry, ocr_mode=mode)
     tidy_items(result)
+    english_description(result)
     return result, header
 
 
@@ -329,6 +333,12 @@ class _Line:
         return {cols[i].field: _union([(w["x0"], w["top"], w["x1"], w["bottom"]) for w in ws])
                 for i, ws in self.by_col.items() if cols[i].field and ws}
 
+    def other_cells(self, cols: list[Label]) -> dict[str, tuple[str, Bbox]]:
+        """Text and box of the columns no field was found for ("Coded Part"), by their header text."""
+        return {cols[i].text: (" ".join(w["text"] for w in ws),
+                               _union([(w["x0"], w["top"], w["x1"], w["bottom"]) for w in ws]))
+                for i, ws in sorted(self.by_col.items()) if not cols[i].field and ws}
+
 
 def _read_line(words: list[dict[str, Any]], cols: list[Label]) -> _Line:
     by_col: dict[int, list[dict[str, Any]]] = {}
@@ -348,6 +358,33 @@ def _is_item(values: dict[str, str], fields: dict[str, int]) -> bool:
     if any(f in fields for f in NUMBER_FIELDS):
         return any(is_number(values.get(f)) for f in NUMBER_FIELDS)
     return bool(values.get("model"))
+
+
+def _join_rows(lines: list[list[dict[str, Any]]], cols: list[Label], fields: dict[str, int]) -> list[list[dict[str, Any]]]:
+    """Text lines joined into table rows: lines that overlap vertically are one row.
+
+    A cell may be written over more lines than its neighbours – "电缆/无接头" above and "/300V/RADSOK牌"
+    below the line that holds the numbers – so parts of a row stand above and below it. Two rows of a
+    table never overlap vertically, so an overlap means one row; two line items are never joined.
+    """
+    rows: list[list[dict[str, Any]]] = []
+    bands: list[tuple[float, float]] = []
+    items: list[bool] = []
+    for words in lines:
+        top, bottom = min(w["top"] for w in words), max(w["bottom"] for w in words)
+        item = _is_item(_read_line(words, cols).values, fields)
+        if rows:
+            band_top, band_bottom = bands[-1]
+            over = min(bottom, band_bottom) - max(top, band_top)
+            if over > _OVERLAP * min(bottom - top, band_bottom - band_top) and not (item and items[-1]):
+                rows[-1] += words
+                bands[-1] = (min(top, band_top), max(bottom, band_bottom))
+                items[-1] = items[-1] or item
+                continue
+        rows.append(list(words))
+        bands.append((top, bottom))
+        items.append(item)
+    return rows
 
 
 def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carried: bool = False, ocr_mode: str = ocr.AUTO) -> PdfExtract:
@@ -374,9 +411,11 @@ def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carri
         elif lines and norm(" ".join(w["text"] for w in lines[0])) == first_line and not carried:
             # the same page layout as the header's page: the table goes on where its header was
             lines = [ln for ln in lines if min(w["top"] for w in ln) >= header.top - 1.5 * height]
+        lines = _join_rows(lines, cols, header.fields)
         before = len(result.items)
         pending: list[_Line] = []
         last_bottom: float | None = None
+        wrapping = False  # whether the lines read now still continue the last item
         for words in lines:
             line = _read_line(words, cols)
             if _repeats_header(words, cols):
@@ -397,8 +436,10 @@ def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carri
                 item["_source"] = f"{name} p.{page_no}"
                 result.items.append(item)
                 result.rows.append(RowBox(page_no, line.bbox, line.cell_boxes(cols)))
+                result.others.append(line.other_cells(cols))
                 text_cols |= {i for i, ws in line.by_col.items() if any(re.search(r"[A-Za-z]{2}", w["text"]) for w in ws)}
                 last_bottom = line.bottom
+                wrapping = True
                 continue
             if not result.items:
                 continue  # under the header, before the first item (units such as "(USD)")
@@ -411,9 +452,12 @@ def _read_words(data: bytes, name: str, header: Header, spec: GenericSpec, carri
                 break
             if last_bottom is not None and line.top - last_bottom > max_gap:
                 break  # far below the last item: the table has ended on this page
-            if all(i in text_cols for i in line.by_col):
+            if wrapping and all(i in text_cols for i in line.by_col):
                 _join(result, line, cols)
                 last_bottom = line.bottom
+            else:
+                wrapping = False  # wrapped text follows its line; a line that is not part of it ends it
+                # (an invoice may write notes under its items: "Commodity: … Material: …")
         if page_no > header.page and len(result.items) == before:
             break  # the table does not go on to this page
     result.text = "\n".join(texts)
@@ -432,6 +476,11 @@ def _join(result: PdfExtract, line: _Line, cols: list[Label]) -> None:
     for f, v in line.values.items():
         if v:
             item[f] = f"{item.get(f, '')} {v}".strip()
+    if result.others:
+        others = result.others[-1]
+        for label, (text, cell) in line.other_cells(cols).items():
+            was = others.get(label)
+            others[label] = (f"{was[0]} {text}".strip(), _union([was[1], cell])) if was else (text, cell)
     cells = dict(box.cells)
     for f, b in line.cell_boxes(cols).items():
         cells[f] = _union([cells[f], b]) if f in cells else b
@@ -724,6 +773,37 @@ def tidy_items(part: PdfExtract) -> None:
         for k, row in enumerate(part.rows):
             if "description" in row.cells:
                 part.rows[k] = replace(row, cells={**row.cells, "hs_code": row.cells["description"]})
+
+
+def _letters(text: str) -> int:
+    return len(re.findall(r"[A-Za-z]", text or ""))
+
+
+def english_description(part: PdfExtract) -> None:
+    """Invoices that keep the English description in another column than the one their header calls
+    "Description" (Amphenol: that column is the Chinese customs name 中国海关品名 and the English
+    description stands under "Coded Part") – in place.
+
+    Only for a line whose description is Chinese that leaves less than two English words: the English
+    text of the columns no field was found for is used instead – the longest one, and only if it has
+    more letters than the Chinese cell. Which column it came from is said in a note, so the line is
+    marked for review. Columns are known for PDFs read by their words (_read_words), not for Excel.
+    """
+    for n, (item, other) in enumerate(zip(part.items, part.others), 1):
+        chinese = item.get("description", "")
+        if not transforms.has_cjk(chinese) or _words(transforms.strip_chinese(chinese)) >= 2:
+            continue
+        english = [(label, text, box) for label, (text, box) in other.items()
+                   if _words(text) >= 2 and not transforms.has_cjk(text) and _letters(text) > _letters(chinese)]
+        if not english:
+            continue
+        label, text, box = max(english, key=lambda c: _letters(c[1]))
+        item["description"] = text
+        part.rows[n - 1] = replace(part.rows[n - 1], cells={**part.rows[n - 1].cells, "description": box})
+        part.notes.append(
+            f"line {n}: the '{part.labels.get('description', 'Description')}' column holds only Chinese "
+            f"('{chinese}') – the English text under '{label}' was used as the description, please check it"
+        )
 
 
 # ───────────────────────────── invoice fields & checks ─────────────────────────────

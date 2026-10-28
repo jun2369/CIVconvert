@@ -50,6 +50,9 @@ fields:
     - 'net\s*w(eigh)?t|^n\.?\s?w\.?$|净重'
   gross_weight:
     - 'gross\s*w(eigh)?t|^g\.?\s?w\.?$|毛重'
+  # 明细表里的发票号列（装箱单 + 发票合一的单据常有）。表头文字里找不到发票号时才用它（见 pipeline）
+  line_invoice_no:
+    - '^(commercial\s*)?inv(oice)?\.?\s*(no\.?|number|#)$|^发票号码?$'
 
 # 表头含这些内容时不算该字段（例如 "HTS Description" 不是品名，"Qty / CTN" 不是数量）
 not:
@@ -74,13 +77,16 @@ other_title: 'packing\s*(list|slip)|weight\s*list|\bcontract\b|proforma|合同|�
 total_row: '^(sub\s*-?\s*total|grand\s*total|total|合\s*计|总\s*计|小\s*计)\b'
 
 # 发票级信息（正则，括号内为取值）；{DATE} = 常见的日期写法
+# 发票级信息（正则，括号内为取值）；{DATE} = 常见的日期写法。
+# 取到的值必须含数字（(?=…\d) ），否则会把紧跟在标签后面的下一个表头词当成发票号
+# （Amphenol 的表头 "Invoice No. Quantity Units …" 会读成 "Quantity"）
 document_fields:
   invoice_no:
-    - '(?:commercial\s+)?invoice\s*(?:no\.?|number|num\.?|#)\s*[:.#]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
-    - '\binv\.?\s*(?:no\.?|#)\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
-    - '发票号(?:码)?\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - '(?:commercial\s+)?invoice\s*(?:no\.?|number|num\.?|#)\s*[:.#]?\s*((?=[A-Za-z0-9\-/._]*\d)[A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - '\binv\.?\s*(?:no\.?|#)\s*[:]?\s*((?=[A-Za-z0-9\-/._]*\d)[A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - '发票号(?:码)?\s*[:]?\s*((?=[A-Za-z0-9\-/._]*\d)[A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
     # "Invoice no & date: AI-083-26-27 Dt. 28.09.2026"（Excel 里常是标签在上、值在下面一格）
-    - 'invoice\s*(?:no\.?|number|#)\s*(?:&|and|/)\s*date[ \t]*[:.]?[ \t]*([A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
+    - 'invoice\s*(?:no\.?|number|#)\s*(?:&|and|/)\s*date[ \t]*[:.]?[ \t]*((?=[A-Za-z0-9\-/._]*\d)[A-Za-z0-9][A-Za-z0-9\-/._]{2,})'
   invoice_date:
     - 'invoice\s*date\s*[:]?\s*({DATE})'
     - '(?<![a-z])date\s*[:]\s*({DATE})'

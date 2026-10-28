@@ -10,6 +10,7 @@ import pytest
 from openpyxl import Workbook
 
 from civconvert import generic, preview
+from civconvert.extract import PdfExtract, RowBox
 from civconvert.pipeline import ConversionError, InputFile, convert
 from civconvert.profiles import load_generic
 from pdfgen import _document, _right, _text, invoice_pdf, offset_invoice_pdf, problem_invoice, text_invoice_pdf
@@ -301,6 +302,70 @@ def test_an_hs_code_inside_the_description():
     r = convert([InputFile("lights.pdf", _document(["\n".join(ops).encode("latin-1")]))])
     assert _dfe(r) == [("LP-600", "LED PANEL LIGHT 600X600", "9405.40.8440"), ("LP-300", "LED PANEL LIGHT 300X300", "9405.40.8440")]
     assert all(c.ok for c in r.checks) and {c.name for c in r.checks} >= {"Subtotal qty", "Line math"}
+
+
+AMPHENOL_COLUMNS = [("SN", 40), ("Part Number", 80), ("Coded Part", 180), ("Invoice No.", 280),
+                    ("Quantity", 360), ("Unit Price", 420), ("Total Value", 490),
+                    ("Description Of Goods", 580), ("HS Code", 700)]
+
+
+def amphenol_pdf() -> bytes:
+    """An Amphenol-style packing list & invoice (landscape, no ruling lines): one item whose cells are
+    written over three lines – the description stands above *and* below the line with the numbers – and
+    notes under the item ("Lot No …", "Material …") that are not part of it."""
+    ops = ["0.5 w", _text(300, 560, "PACKING LIST & COMMERCIAL INVOICE", 12)]
+    ops += [_text(x, 520, label) for label, x in AMPHENOL_COLUMNS]
+    ops += [_text(180, 500, "Cable assembly"), _text(580, 500, "Insulated wire")]  # above the numbers
+    for x, value in ((40, "1"), (80, "CWR10-020-09ST"), (280, "10939717"), (360, "19200"),
+                     (420, "1.317427"), (490, "25294.5984"), (700, "8544492100")):
+        ops.append(_text(x, 495, value))
+    ops += [_text(180, 490, "without connector"), _text(580, 490, "300V RADSOK brand")]  # below the numbers
+    ops += [_text(40, 476, "Lot No: 5059896501"), _text(180, 464, "Material Copper Rubber")]
+    return _document(["\n".join(ops).encode("latin-1")], width=842, height=595)
+
+
+def test_a_cell_written_above_and_below_the_line_with_the_numbers():
+    """Amphenol: the description cell has two lines while the rest of its row has one, so half of it
+    stands above the numbers and half below – lines that overlap vertically are one row. The notes
+    under the item are not wrapped text of it, and the invoice number is the one in the table (the
+    text says "Invoice No." only as a column header, with "Quantity" behind it)."""
+    r = convert([InputFile("26090643.pdf", amphenol_pdf())])
+    assert _dfe(r) == [("CWR10-020-09ST", "Insulated wire 300V RADSOK brand", "8544492100")]
+    assert r.document == {"invoice_no": "10939717"}
+    assert "Copper" not in str(r.items) and "Lot No" not in str(r.items)
+    assert r.items[0]["qty"] == "19200" and r.items[0]["unit_price"] == "1.317427"
+    assert [c.ok for c in r.checks if c.name == "Line math"] == [True]
+
+
+def _chinese_part(description: str, others: dict[str, str]) -> PdfExtract:
+    box = (0.0, 0.0, 1.0, 1.0)
+    return PdfExtract(name="x.pdf", labels={"description": "Description Of Goods"},
+                      items=[{"model": "CWR10-020-09ST", "description": description}],
+                      rows=[RowBox(1, box, {"description": box})],
+                      others=[{k: (v, (2.0, 0.0, 3.0, 1.0)) for k, v in others.items()}])
+
+
+def test_a_description_column_of_only_chinese_takes_the_english_of_another_column():
+    """Amphenol: "Description Of Goods" is the Chinese customs name 中国海关品名 and the English
+    description stands under "Coded Part" – it is used instead, and the line is marked for review."""
+    part = _chinese_part("电缆/无接头 /300V/RADSOK牌",
+                         {"Coded Part": "UL3132 10AWG wire, BK", "Currency": "USD", "Remark": "600 PCS*32"})
+    generic.english_description(part)
+    assert part.items[0]["description"] == "UL3132 10AWG wire, BK"
+    assert part.rows[0].cells["description"] == (2.0, 0.0, 3.0, 1.0)  # the preview marks the column it came from
+    assert len(part.notes) == 1 and "Coded Part" in part.notes[0]
+
+
+@pytest.mark.parametrize("description, others", [
+    ("Pivot Stand 转向支架", {"Coded Part": "UL3132 10AWG wire, BK"}),  # English of its own: left alone
+    ("Automotive Tempered Glass", {"Coded Part": "UL3132 10AWG wire, BK"}),
+    ("电缆/无接头 /300V/RADSOK牌", {"Coded Part": "DXCWR10-020-01", "Units": "M"}),  # no English to take
+    ("电缆/无接头 /300V/RADSOK牌", {"Coded Part": "电缆 无接头"}),
+])
+def test_the_description_of_other_invoices_is_left_alone(description, others):
+    part = _chinese_part(description, others)
+    generic.english_description(part)
+    assert part.items[0]["description"] == description and part.notes == []
 
 
 def test_a_proper_hs_code_column_is_left_alone():

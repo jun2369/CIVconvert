@@ -474,6 +474,13 @@ def _convert_general(files: list[InputFile], kinds: list[str], hint: CustomerPro
                 warnings.append(f"{key} differs between the files: '{document[key]}' / '{value}' ({f.name})")
             document.setdefault(key, value)
 
+    # no invoice number in the text, but the item table has a column for it (packing list + invoice in
+    # one document): the number of its lines, when they all say the same
+    if "invoice_no" not in document:
+        on_lines = {i["line_invoice_no"].strip() for i in items if i.get("line_invoice_no", "").strip()}
+        if len(on_lines) == 1:
+            document["invoice_no"] = on_lines.pop()
+
     names = ", ".join(f.name for f in files)
     if not any(p.header_found for p in parts):
         what = generic.other_document("\n".join(p.text for p in parts), spec)

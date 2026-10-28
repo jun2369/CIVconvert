@@ -71,6 +71,8 @@ class PdfExtract:
     labels: dict[str, str] = field(default_factory=dict)  # field -> its header text in the PDF
     items: list[dict[str, str]] = field(default_factory=list)
     rows: list[RowBox] = field(default_factory=list)  # where each item is (same order as items)
+    others: list[dict[str, tuple[str, Bbox]]] = field(default_factory=list)  # per item: the columns no field
+    # was found for, header text -> (text, box); PDFs read by their words only (generic._read_words)
     headers: list[RowBox] = field(default_factory=list)  # the header row, and its repeats on later pages
     totals: dict[str, str] | None = None
     totals_row: RowBox | None = None
