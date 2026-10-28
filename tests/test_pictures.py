@@ -15,7 +15,9 @@ from test_documents import detail, upload
 from test_generic import _text_items
 
 needs_ocr = pytest.mark.skipif(not ocr.available(), reason="OCR packages not installed")
-WIRE_MESH = {"model": "Wire Mesh Cage", "description": "1200*1000*1200mm", "qty": "358", "unit_price": "60", "amount": "21480"}
+# its "Description" column holds only the size, so the name of the goods is put in front of it (tidy_items)
+WIRE_MESH = {"model": "Wire Mesh Cage", "description": "Wire Mesh Cage 1200*1000*1200mm", "qty": "358",
+             "unit_price": "60", "amount": "21480"}
 
 
 def render(pdf: bytes, dpi: int = 200, fmt: str = "PNG", **save) -> bytes:
@@ -144,7 +146,7 @@ def test_a_ruled_invoice_as_a_picture(name, data):
     ocr_check = next(c for c in r.checks if c.name == "OCR")
     assert ocr_check.code == "ocr" and ocr_check.params == {"pages": f"{name} p.1"}
     assert r.parts[0].ocr_pages == [1] and r.needs_review
-    assert [row[3:6] for row in r.rows] == [["Wire Mesh Cage", "1200*1000*1200mm", ""]]  # the invoice has no HS code
+    assert [row[3:6] for row in r.rows] == [["Wire Mesh Cage", "Wire Mesh Cage 1200*1000*1200mm", ""]]  # no HS code on it
 
 
 @needs_ocr

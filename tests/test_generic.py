@@ -337,6 +337,53 @@ def test_a_cell_written_above_and_below_the_line_with_the_numbers():
     assert [c.ok for c in r.checks if c.name == "Line math"] == [True]
 
 
+def speed_xpress_pdf() -> bytes:
+    """The Shenzhen Ali / Speed Xpress invoice as a PDF without ruling lines: two of its columns are
+    headed one line higher ("Unite Price" / "Amount", their "(USD)" one line lower), the name of the
+    goods stands above and below the line with the numbers, and the totals row has no "Total" label."""
+    ops = ["0.5 w", _text(220, 700, "COMMERCIAL INVOICE", 12), _text(60, 660, "Invoice No: SPX-443")]
+    ops += [_text(412, 610, "Unite Price"), _text(486, 610, "Amount")]           # the line above the header
+    for label, x in (("No", 73), ("Item code", 101), ("Description", 198), ("Q'ty", 321), ("Unit", 374)):
+        ops.append(_text(x, 605, label))
+    ops += [_text(412, 600, "(USD)"), _text(486, 600, "(USD)")]                  # the line below it
+    ops.append(_text(101, 578, "Wire Mesh"))
+    for x, value in ((73, "1"), (198, "1200*1000*1200mm"), (321, "358"), (374, "(PCS)"), (412, "60"), (486, "21480")):
+        ops.append(_text(x, 573, value))
+    ops += [_text(101, 568, "Cage"), _text(321, 550, "358"), _text(486, 550, "21480")]
+    return _document(["\n".join(ops).encode("latin-1")])
+
+
+def test_a_column_headed_one_line_higher():
+    """Speed Xpress: "Unite Price" and "Amount" stand over the line with the other labels, so without
+    them the price and the amount were read as part of the "Unit" column."""
+    r = convert([InputFile("spx.pdf", speed_xpress_pdf())])
+    assert r.parts[0].labels["unit_price"] == "Unite Price" and r.parts[0].labels["amount"] == "Amount"
+    item = r.items[0]
+    assert (item["qty"], item["unit_price"], item["amount"]) == ("358", "60", "21480")
+    assert {c.name: c.ok for c in r.checks} == {"Line items": True, "Subtotal qty": True,
+                                                "Subtotal amount": True, "Line math": True}
+    assert r.document == {"invoice_no": "SPX-443"}
+
+
+def test_the_name_of_the_goods_in_the_item_code_column():
+    """Speed Xpress: "Item code" holds the name of the goods and "Description" only their size – the
+    name is put in front of it, so the Goods Description says what the goods are."""
+    r = convert([InputFile("spx.pdf", speed_xpress_pdf())])
+    assert _dfe(r) == [("Wire Mesh Cage", "Wire Mesh Cage 1200*1000*1200mm", "")]
+    box = r.parts[0].rows[0].cells  # the preview marks both columns as the description
+    assert box["description"][0] == box["model"][0] and box["description"][2] > box["model"][2]
+
+
+@pytest.mark.parametrize("model, description", [
+    ("CWR10-020-09ST", "300V RADSOK"),   # a product code is not the name of the goods
+    ("Wire Mesh Cage", "Steel cage for pallets"),  # a description of its own
+])
+def test_the_description_is_not_taken_from_the_item_code_column(model, description):
+    part = PdfExtract(name="x.pdf", items=[{"model": model, "description": description}], rows=[])
+    generic.tidy_items(part)
+    assert part.items[0]["description"] == description
+
+
 def _chinese_part(description: str, others: dict[str, str]) -> PdfExtract:
     box = (0.0, 0.0, 1.0, 1.0)
     return PdfExtract(name="x.pdf", labels={"description": "Description Of Goods"},

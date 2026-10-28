@@ -14,7 +14,9 @@ the one that looks most like the invoice's line items wins: HS codes and prices 
     may go on over the next pages, with or without repeating its header; the last "Total" line is
     the one that is checked – or a line of only the sums of quantity / amount without a "Total" label
   - pictures and scanned pages: read by OCR first (ocr.py), then as above
-  - a header word broken over two lines ("Quantit" / "y") is one word; an HS code written in the description
+  - a header may be written over two lines, the second one above it ("Unite Price" over the line with the
+    other labels, its "(USD)" under it): a label of the line above that stands over no label of its own is
+    a column; a header word broken over two lines ("Quantit" / "y") is one word; an HS code written in the description
     ("… HS:7007.11.0010") becomes the HS code; product codes under a "Description" header next to the
     descriptions under "Hs Code" are taken for what they are (tidy_items); a description column that holds
     only the Chinese customs name is replaced by the English text of another column (english_description)
@@ -179,22 +181,51 @@ def _merge_below(labels: list[Label], below: list[Label], glue: bool = False) ->
     return out
 
 
+def _merge_above(labels: list[Label], above: list[Label]) -> list[Label] | None:
+    """A header line that is not the whole header: a label of the line above that stands over a column of
+    its own ("Unite Price" over the line with "Q'ty" and "Unit", its "(USD)" under it) is that column;
+    one that stands over a label of this line belongs to it ("United States" over "HS Code"). None when
+    nothing of the line above is a column of its own – _merge_below already reads that header."""
+    out = [replace(lb) for lb in labels]
+    own = False
+    for a in above:
+        hits = [lb for lb in out if min(a.x1, lb.x1) - max(a.x0, lb.x0) > 0]
+        if hits:
+            lb = hits[0]
+            lb.text, lb.x0, lb.x1, lb.top = f"{a.text} {lb.text}", min(lb.x0, a.x0), max(lb.x1, a.x1), min(lb.top, a.top)
+        else:
+            out.append(replace(a))
+            own = True
+    return sorted(out, key=lambda lb: lb.x0) if own else None
+
+
+def _close(upper: list[dict[str, Any]], lower: list[dict[str, Any]], height: float) -> bool:
+    """Whether two text lines are near enough to be one header."""
+    return min(w["top"] for w in lower) - max(w["bottom"] for w in upper) < 1.2 * height
+
+
 def _word_headers(page_no: int, lines: list[list[dict[str, Any]]], spec: GenericSpec, bonus: int) -> list[Header]:
     found = []
     for i, line in enumerate(lines):
         labels = _labels(line)
         if len(labels) < 3:
             continue
-        options = [labels]
-        if i + 1 < len(lines):
+        height = line[0]["bottom"] - line[0]["top"]
+        starts = [labels]
+        if i > 0 and _close(lines[i - 1], line, height):
+            above = _merge_above(labels, _labels(lines[i - 1]))
+            if above:
+                starts.append(above)
+        options = list(starts)
+        if i + 1 < len(lines) and _close(line, lines[i + 1], height):
             below = _labels(lines[i + 1])
-            gap = min(w["top"] for w in lines[i + 1]) - max(w["bottom"] for w in line)
-            merged = _merge_below(labels, below) if gap < 1.2 * (line[0]["bottom"] - line[0]["top"]) else None
-            if merged:
-                options.append(merged)
-                glued = _merge_below(labels, below, glue=True)
-                if glued and [lb.text for lb in glued] != [lb.text for lb in merged]:
-                    options.append(glued)
+            for start in starts:
+                merged = _merge_below(start, below)
+                if merged:
+                    options.append(merged)
+                    glued = _merge_below(start, below, glue=True)
+                    if glued and [lb.text for lb in glued] != [lb.text for lb in merged]:
+                        options.append(glued)
         for opt in options:
             m = match_labels([lb.text for lb in opt], spec)
             if m is None:
@@ -740,6 +771,8 @@ def tidy_items(part: PdfExtract) -> None:
         descriptions: "7475833-08" | "Automotive Tempered Glass HS:7007.11.0010" (a Fuyao Glass invoice)
       - an HS code written inside the description ("… HS:7007.11.0010") when there is no HS code column:
         it becomes the HS code and leaves the description
+      - the "Item code" column holds the name of the goods and the "Description" column only their size:
+        "Wire Mesh Cage" | "1200*1000*1200mm" (a Shenzhen Ali invoice) – the name is put in front of the size
     """
     items = part.items
     if not items:
@@ -773,6 +806,16 @@ def tidy_items(part: PdfExtract) -> None:
         for k, row in enumerate(part.rows):
             if "description" in row.cells:
                 part.rows[k] = replace(row, cells={**row.cells, "hs_code": row.cells["description"]})
+    # the item-code column holds the name of the goods and the "Description" column only their size
+    # ("Wire Mesh Cage" | "1200*1000*1200mm"): the name belongs in the description as well
+    # (a product code with letters in it – "CWR10-020-09ST" – is not a name, _CODE)
+    if all(i.get("description") and _words(i["description"]) < 2
+           and _words(i.get("model", "")) >= 2 and not _CODE.match(i.get("model", "")) for i in items):
+        for n, i in enumerate(items):
+            i["description"] = f"{i['model']} {i['description']}"
+            cells = part.rows[n].cells if n < len(part.rows) else {}
+            if "model" in cells and "description" in cells:
+                part.rows[n] = replace(part.rows[n], cells={**cells, "description": _union([cells["model"], cells["description"]])})
 
 
 def _letters(text: str) -> int:
