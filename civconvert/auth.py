@@ -6,10 +6,10 @@ answer when success is true and data has userId and token. The e-mail goes to Ni
 (like the Nimbus login page; an account may have capitals), then in lower case; our user is the
 lower-case address. The password is never stored or logged, and the Nimbus token is not kept.
 
-Extra accounts (LOCAL_LOGINS, "NAME:PASSWORD" separated by commas): a login that does not go
-through Nimbus, for someone without a company account. Such a name is checked before Nimbus, it
-needs no @ in it, and it is rate limited like any other; the user is an ordinary user of this
-system. Nothing is set = there are none, and only Nimbus can log a user in.
+Extra accounts (settings.local_logins): a login that does not go through Nimbus, for someone
+without a company account. TEST001 is one of them and needs nothing set up. Such a name is
+checked before Nimbus, it needs no @ in it, and it is rate limited like any other; the user is
+an ordinary user of this system. Nothing else about the Nimbus login changes.
 
 Session: a random token in an HttpOnly cookie (scripts cannot read it); only its SHA-256 is
 stored in user_sessions, so logging out really ends it. Requests that change data must also

@@ -54,14 +54,18 @@ def nimbus_api_url() -> str:
     return env("NIMBUS_API_URL", "https://nimbusgroup.us").rstrip("/")
 
 
+LOCAL_LOGINS = "TEST001:202728"  # the account below, for someone without a Nimbus account
+
+
 def local_logins() -> dict[str, tuple[str, str]]:
-    """Login accounts of our own, which do not go through Nimbus: LOCAL_LOGINS = "NAME:PASSWORD"
-    (comma-separated for several). Not set = there are none and only Nimbus can log a user in.
+    """Login accounts of our own, which do not go through Nimbus: a name and its password, and a
+    comma between two of them. TEST001 is here for someone who has no Nimbus account; LOCAL_LOGINS
+    replaces it (set it to nothing at all and there are no such accounts, only Nimbus).
     The name is compared in lower case; one with an @ in it hides the Nimbus account of that address.
     Each is {lower case name: (the name as it is written here, the password)}.
     """
     out: dict[str, tuple[str, str]] = {}
-    for pair in env("LOCAL_LOGINS").split(","):
+    for pair in env("LOCAL_LOGINS", LOCAL_LOGINS).split(","):
         name, _, password = pair.partition(":")
         if name.strip() and password:
             out[name.strip().lower()] = (name.strip(), password)

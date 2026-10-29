@@ -4,7 +4,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from civconvert import auth, db
+from civconvert import auth, db, settings
 from civconvert.models import User, UserSession
 from conftest import login
 
@@ -129,7 +129,7 @@ def test_expired_session(user_client):
 
 # ───────────────────────────── accounts that do not go through Nimbus ─────────────────────────────
 
-# the real account and its password are configured in the hosting platform, never here
+# the password of the built-in account stays in settings.py; these tests configure one of their own
 LOCAL = {"email": "TEST001", "password": "local-account-password"}
 
 
@@ -168,11 +168,21 @@ def test_an_extra_account_with_a_wrong_password(app_client, nimbus, local_accoun
     assert nimbus["calls"] == []
 
 
-def test_without_local_logins_there_are_no_extra_accounts(app_client, nimbus):
-    """Nothing set (the default): the login works exactly as it did before."""
-    assert app_client.post("/api/auth/login", json=LOCAL).status_code == 400
+def test_the_built_in_account_needs_nothing_set_up(app_client, nimbus):
+    """TEST001 is there with no LOCAL_LOGINS set; a wrong password for it means it exists."""
+    assert set(settings.local_logins()) == {"test001"}
+    res = app_client.post("/api/auth/login", json={**LOCAL, "password": "not-it"})
+    assert res.status_code == 401 and res.json()["code"] == "wrong_credentials"
     assert nimbus["calls"] == []
     assert app_client.post("/api/auth/login", json=GOOD).status_code == 200  # Nimbus is untouched
+
+
+def test_local_logins_can_switch_the_built_in_account_off(app_client, nimbus, monkeypatch):
+    monkeypatch.setenv("LOCAL_LOGINS", "")
+    assert settings.local_logins() == {}
+    res = app_client.post("/api/auth/login", json=LOCAL)  # no @ in it, so Nimbus is not asked either
+    assert res.status_code == 400 and res.json()["code"] == "email_password_required"
+    assert nimbus["calls"] == []
 
 
 def test_several_extra_accounts(app_client, nimbus, monkeypatch, local_account):

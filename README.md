@@ -66,10 +66,11 @@
 登录后是本系统自己的会话（HttpOnly cookie，默认 7 天不使用即过期，退出登录立即失效）。
 同一邮箱 15 分钟内输错 5 次会暂时锁定（防止猜密码）。第一次登录时自动建立用户。
 
-**不走 Nimbus 的账号**：环境变量 `LOCAL_LOGINS`（`用户名:密码`，多个用逗号隔开）里的账号直接由本系统验证，
-不转发给 Nimbus，用户名也不必是邮箱（例如 `TEST001`）。给没有 Nimbus 账户的人试用用。
+**不走 Nimbus 的账号**：有一个固定账号 `TEST001`（密码见 `civconvert/settings.py` 的 `LOCAL_LOGINS`），
+直接由本系统验证，**不转发给 Nimbus**，用户名也不必是邮箱。给没有 Nimbus 账户的人试用用。
 它和普通用户完全一样（只看得到自己上传的文档），同样有 15 分钟 5 次的限流，操作记录里标 `via: local`。
-**密码只写在 Northflank 的环境变量里，不要写进代码**（本仓库是公开的）。不设置 `LOCAL_LOGINS` 就没有这种账号。
+环境变量 `LOCAL_LOGINS`（`用户名:密码`，多个用逗号隔开）会**替换**这个账号；把它设成空值就一个都没有，只剩 Nimbus 登录。
+注意本仓库是公开的，这个密码等于公开，所以它只是试用账号，别给它放要紧的东西。
 
 **文档**：每次上传**一个**文件（PDF 或 Excel）= 一个文档（一张发票，包含它的全部明细行）。一次选多个文件会被拒绝（网页和服务器都会检查），
 避免不同发票混在一起、分析出错。以前合并上传的多 PDF 文档照常可以打开、编辑和重新转换。
@@ -274,7 +275,7 @@ Power Automate 收到符合条件的邮件后，把整封邮件（含附件）�
      - `DATABASE_URL` = 上面的 PostgreSQL 连接字符串（也可以在 addon 里用 “Link to service / secret group” 自动注入）
      - `NIMBUS_API_URL` = `https://nimbusgroup.us`
      - `API_KEY` = 一串足够长的随机字符（Power Automate 等程序调用转换接口用）
-     - `LOCAL_LOGINS` =（可选）`用户名:密码`，不走 Nimbus 的试用账号，例如 `TEST001:********`
+     - `LOCAL_LOGINS` =（可选）`用户名:密码`，换掉代码里固定的 `TEST001` 试用账号；设成空值则关闭它
    - Resources：nf-compute-20（0.2 vCPU / 512 MB）起
    - Health checks（可选）：HTTP `GET /healthz`，端口 8080
 4. 创建后会自动构建，完成后得到一个 `https://….code.run` 地址，打开即为网页版（先用 Nimbus 账户登录）
