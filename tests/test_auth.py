@@ -125,3 +125,59 @@ def test_expired_session(user_client):
         for sess in s.scalars(select(UserSession)):
             sess.expires_at = db.utcnow().replace(year=2000)
     assert user_client.get("/api/auth/me").status_code == 401
+
+
+# ───────────────────────────── accounts that do not go through Nimbus ─────────────────────────────
+
+# the real account and its password are configured in the hosting platform, never here
+LOCAL = {"email": "TEST001", "password": "local-account-password"}
+
+
+@pytest.fixture
+def local_account(monkeypatch):
+    """An extra account like the one production has (LOCAL_LOGINS)."""
+    monkeypatch.setenv("LOCAL_LOGINS", f"{LOCAL['email']}:{LOCAL['password']}")
+
+
+def test_an_extra_account_logs_in_without_nimbus(app_client, nimbus, local_account):
+    res = app_client.post("/api/auth/login", json=LOCAL)
+    assert res.status_code == 200, res.text
+    assert res.json()["user"] == {**res.json()["user"], "email": "test001", "name": "TEST001", "role": "user"}
+    assert nimbus["calls"] == []  # the password was never sent anywhere
+    assert app_client.get("/api/auth/me").json()["user"]["email"] == "test001"
+    with db.session_scope() as s:
+        user = s.scalar(select(User).where(User.email == "test001"))
+        assert user.nimbus_user_id is None
+        assert s.scalar(select(UserSession).where(UserSession.user_id == user.id)) is not None
+
+
+def test_the_name_of_an_extra_account_is_not_an_e_mail_address(app_client, nimbus, local_account):
+    """It needs no @; anything else without one is still refused before Nimbus is asked."""
+    res = app_client.post("/api/auth/login", json={**LOCAL, "email": " test001 "})
+    assert res.status_code == 200 and res.json()["user"]["name"] == "TEST001"  # the name as configured
+    res = app_client.post("/api/auth/login", json={**LOCAL, "email": "TEST002"})
+    assert res.status_code == 400 and res.json()["code"] == "email_password_required"
+    assert nimbus["calls"] == []
+
+
+def test_an_extra_account_with_a_wrong_password(app_client, nimbus, local_account):
+    for _ in range(5):
+        res = app_client.post("/api/auth/login", json={**LOCAL, "password": "nope"})
+        assert res.status_code == 401 and res.json()["code"] == "wrong_credentials"
+    assert app_client.post("/api/auth/login", json=LOCAL).status_code == 429  # rate limited like any other
+    assert nimbus["calls"] == []
+
+
+def test_without_local_logins_there_are_no_extra_accounts(app_client, nimbus):
+    """Nothing set (the default): the login works exactly as it did before."""
+    assert app_client.post("/api/auth/login", json=LOCAL).status_code == 400
+    assert nimbus["calls"] == []
+    assert app_client.post("/api/auth/login", json=GOOD).status_code == 200  # Nimbus is untouched
+
+
+def test_several_extra_accounts(app_client, nimbus, monkeypatch, local_account):
+    monkeypatch.setenv("LOCAL_LOGINS", f"{LOCAL['email']}:{LOCAL['password']}, Demo:another-one")
+    assert app_client.post("/api/auth/login", json=LOCAL).status_code == 200
+    assert app_client.post("/api/auth/login", json={"email": "DEMO", "password": "another-one"}).status_code == 200
+    assert app_client.post("/api/auth/login", json={"email": "demo", "password": LOCAL["password"]}).status_code == 401
+    assert nimbus["calls"] == []

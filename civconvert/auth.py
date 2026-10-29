@@ -6,6 +6,11 @@ answer when success is true and data has userId and token. The e-mail goes to Ni
 (like the Nimbus login page; an account may have capitals), then in lower case; our user is the
 lower-case address. The password is never stored or logged, and the Nimbus token is not kept.
 
+Extra accounts (LOCAL_LOGINS, "NAME:PASSWORD" separated by commas): a login that does not go
+through Nimbus, for someone without a company account. Such a name is checked before Nimbus, it
+needs no @ in it, and it is rate limited like any other; the user is an ordinary user of this
+system. Nothing is set = there are none, and only Nimbus can log a user in.
+
 Session: a random token in an HttpOnly cookie (scripts cannot read it); only its SHA-256 is
 stored in user_sessions, so logging out really ends it. Requests that change data must also
 send the header X-CIV-Request: 1, which other websites cannot add (CSRF protection).
@@ -23,7 +28,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from datetime import timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import httpx
 from fastapi import APIRouter, Depends, Header, Request, Response
@@ -78,6 +83,15 @@ def nimbus_sign_in(email: str, password: str) -> dict[str, Any] | None:
     name = next((data[k] for k in ("name", "userName", "nickName", "realName") if isinstance(data.get(k), str) and data[k].strip()), None)
     role = data.get("role") if isinstance(data.get("role"), str) and data["role"].strip() else None
     return {"user_id": str(data["userId"]), "role": role, "name": name}
+
+
+# ───────────────────────────── accounts of our own ─────────────────────────────
+
+
+def local_account(name: str) -> tuple[str, str] | None:
+    """(the name as it is configured, its password) for the extra account this name belongs to
+    (LOCAL_LOGINS), or None when it is not one of them – then the credentials belong to Nimbus."""
+    return settings.local_logins().get(name.strip().lower())
 
 
 # ───────────────────────────── rate limit ─────────────────────────────
@@ -191,6 +205,26 @@ def _name_from_email(email: str) -> str:
     return " ".join(p.capitalize() for p in re.split(r"[._-]+", local) if p) or email
 
 
+def _wrong_credentials(email: str, ip: str) -> NoReturn:
+    failures_by_email.fail(email)
+    failures_by_ip.fail(ip)
+    log.info("failed login for %s from %s", email, ip)
+    raise AppError(401, "wrong_credentials", "Wrong username or password")
+
+
+def _finish_login(db: Session, request: Request, response: Response, email: str, name: str | None,
+                  nimbus: dict[str, Any] | None, ip: str, via: str) -> dict[str, Any]:
+    """What happens once the password was right: the user, the session, the audit line."""
+    failures_by_email.reset(email)
+    user = _upsert_user(db, email, name, nimbus)
+    if not user.is_active:
+        raise AppError(403, "account_disabled", "This account is disabled")
+    start_session(db, user, request, response)
+    db.add(AuditLog(user_id=user.id, action="user.login", detail={"ip": ip, "via": via}, created_at=utcnow()))
+    db.commit()
+    return {"user": user_json(user)}
+
+
 # ───────────────────────────── endpoints ─────────────────────────────
 
 
@@ -212,8 +246,10 @@ def auth_config() -> dict[str, bool]:
 
 @router.post("/login")
 def login(body: LoginIn, request: Request, response: Response, db: Annotated[Session, Depends(get_db)]) -> dict[str, Any]:
-    email = body.email.strip().lower()
-    if not _EMAIL.fullmatch(email) or not body.password:
+    typed = body.email.strip()
+    email = typed.lower()
+    local = local_account(typed)  # an account of ours: Nimbus is never asked about it
+    if not body.password or (local is None and not _EMAIL.fullmatch(email)):
         raise AppError(400, "email_password_required", "Enter your username and password")
     ip = client_ip(request)
     wait = max(failures_by_email.wait(email), failures_by_ip.wait(ip))
@@ -221,7 +257,11 @@ def login(body: LoginIn, request: Request, response: Response, db: Annotated[Ses
         minutes = int(wait // 60) + 1
         raise AppError(429, "too_many_attempts", f"Too many failed logins – try again in {minutes} minute(s)", {"minutes": minutes},
                        headers={"Retry-After": str(int(wait) + 1)})
-    typed = body.email.strip()
+    if local is not None:
+        name, password = local  # the name as configured, however the user typed it
+        if not hmac.compare_digest(body.password.encode(), password.encode()):
+            _wrong_credentials(email, ip)
+        return _finish_login(db, request, response, email, name, None, ip, "local")
     try:
         # as typed, like the Nimbus login page: Nimbus may know the account with capitals ("Cindy.guan@...");
         # then in lower case, which is how it was sent before
@@ -232,18 +272,8 @@ def login(body: LoginIn, request: Request, response: Response, db: Annotated[Ses
         log.warning("Nimbus login unavailable: %s", e)
         raise AppError(502, "nimbus_unavailable", "The Nimbus account system cannot be reached – try again later") from e
     if account is None:
-        failures_by_email.fail(email)
-        failures_by_ip.fail(ip)
-        log.info("failed login for %s from %s", email, ip)
-        raise AppError(401, "wrong_credentials", "Wrong username or password")
-    failures_by_email.reset(email)
-    user = _upsert_user(db, email, account.get("name"), account)
-    if not user.is_active:
-        raise AppError(403, "account_disabled", "This account is disabled")
-    start_session(db, user, request, response)
-    db.add(AuditLog(user_id=user.id, action="user.login", detail={"ip": ip, "via": "nimbus"}, created_at=utcnow()))
-    db.commit()
-    return {"user": user_json(user)}
+        _wrong_credentials(email, ip)
+    return _finish_login(db, request, response, email, account.get("name"), account, ip, "nimbus")
 
 
 @router.post("/dev-login", include_in_schema=False)

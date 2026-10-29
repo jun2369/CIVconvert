@@ -54,6 +54,20 @@ def nimbus_api_url() -> str:
     return env("NIMBUS_API_URL", "https://nimbusgroup.us").rstrip("/")
 
 
+def local_logins() -> dict[str, tuple[str, str]]:
+    """Login accounts of our own, which do not go through Nimbus: LOCAL_LOGINS = "NAME:PASSWORD"
+    (comma-separated for several). Not set = there are none and only Nimbus can log a user in.
+    The name is compared in lower case; one with an @ in it hides the Nimbus account of that address.
+    Each is {lower case name: (the name as it is written here, the password)}.
+    """
+    out: dict[str, tuple[str, str]] = {}
+    for pair in env("LOCAL_LOGINS").split(","):
+        name, _, password = pair.partition(":")
+        if name.strip() and password:
+            out[name.strip().lower()] = (name.strip(), password)
+    return out
+
+
 def dev_login_enabled() -> bool:
     """Log in with just an e-mail address – for local development and tests only."""
     return env_flag("AUTH_DEV_LOGIN")
